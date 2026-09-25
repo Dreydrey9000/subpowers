@@ -1,0 +1,323 @@
+#!/usr/bin/env bash
+# chatgpt-image: make an image with OpenAI's current ChatGPT image model through
+# the codex CLI, paid for by the logged-in ChatGPT subscription (no API key).
+# The ChatGPT painter of subpowers (https://github.com/itsluisc/subpowers).
+# Started from oakplank/gpt-image-bridge (MIT) and rebuilt from there.
+#
+# ALWAYS THE LATEST MODEL, BY CONSTRUCTION:
+#   painter  codex's built-in image tool (image_gen) has no model argument.
+#            OpenAI picks the image model server-side, so every call gets their
+#            current one (GPT Image 2.5 flare/sunburst since 2026-09-08). This
+#            door cannot pin or downgrade it and does not try.
+#   driver   the text model that calls the tool (`codex -m`), picked per call by
+#            bin/resolve-drivers from codex's own model list, newest first, with
+#            quota and availability fall-through.
+#   codex    the CLI is checked against npm once a day and updated with
+#            `codex update`, because new models need new clients. Opt out with
+#            SUBPOWERS_NO_AUTOUPDATE=1.
+#
+# WHAT THE CODEX PATH EXPOSES (codex-cli 0.155.1, read from the binary):
+#   image_gen args = prompt, referenced_image_paths, num_last_images_to_include.
+#   Result event   = saved_path, revised_prompt, transparent_background.
+#   There is no size, quality (low..max), output_format, mask or input_fidelity
+#   argument on this path. --size is passed as a request inside the prompt; the
+#   painter ignores exact pixels (1024x1024 asks return 1254x1254), so the door
+#   resizes locally when the aspect matches and keeps <out>.original.png, the
+#   untouched file that carries OpenAI's C2PA signature.
+#
+# Usage:
+#   chatgpt-image "<prompt>" <out.png> [--size WxH] [--ref IMG]... [--driver MODEL]
+#
+#   --ref     a reference image the painter must see (a person's own photos to
+#             keep their face, a product shot, a style frame). Repeatable.
+#   --driver  pin one driver instead of the resolved chain (rarely needed).
+#
+# Env: CHATGPT_IMAGE_DRIVERS="a:b:default" overrides the chain (GPT_IMAGE_MODELS
+#      is the old name). CHATGPT_IMAGE_EFFORT sets driver reasoning, default low:
+#      the driver only relays the prompt, the painter does the work.
+#
+# Writes <out>.prompt.txt (your prompt + OpenAI's revised prompt + provenance)
+# beside every image. Prints the output path on stdout; provenance on stderr.
+set -euo pipefail
+
+# Resolve our own directory through symlinks (~/.local/bin/chatgpt-image and friends)
+# so the sibling helpers are always found.
+src="${BASH_SOURCE[0]}"
+while [[ -L "$src" ]]; do
+  d="$(cd "$(dirname "$src")" && pwd)"; src="$(readlink "$src")"
+  [[ "$src" != /* ]] && src="$d/$src"
+done
+here="$(cd "$(dirname "$src")" && pwd)"
+
+usage() { echo 'usage: chatgpt-image "<prompt>" <out.png> [--size WxH] [--ref IMG]... [--driver MODEL]' >&2; exit 2; }
+[[ $# -lt 2 ]] && usage
+
+prompt="$1"; out="$2"; shift 2
+size=""; driver=""; refs=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --size)   [[ $# -ge 2 ]] || usage; size="$2"; shift 2 ;;
+    --driver) [[ $# -ge 2 ]] || usage; driver="$2"; shift 2 ;;
+    --ref)    [[ $# -ge 2 ]] || usage; refs+=("$2"); shift 2 ;;
+    -h|--help) usage ;;
+    *) echo "chatgpt-image: unknown arg: $1 (see header for what this path supports)" >&2; exit 2 ;;
+  esac
+done
+
+if [[ -n "$size" && ! "$size" =~ ^[0-9]+x[0-9]+$ ]]; then
+  echo "chatgpt-image: --size must look like 1024x1024" >&2; exit 2
+fi
+# ${arr[@]+...} keeps empty arrays safe under `set -u` on macOS's bash 3.2.
+for r in ${refs[@]+"${refs[@]}"}; do
+  [[ -f "$r" ]] || { echo "chatgpt-image: missing --ref file: $r" >&2; exit 2; }
+done
+
+command -v codex >/dev/null 2>&1 || {
+  echo "chatgpt-image: codex CLI not found. npm install -g @openai/codex (or brew install codex), then codex login" >&2; exit 127; }
+if ! codex login status 2>&1 | grep -qi "chatgpt"; then
+  echo "chatgpt-image: codex is not logged in with ChatGPT (run: codex login). Refusing to fall back to an API key." >&2
+  exit 3
+fi
+
+# Keep the CLI current: once a day, loud, never blocks the image.
+if [[ -z "${SUBPOWERS_NO_AUTOUPDATE:-${GPT_IMAGE_BRIDGE_NO_AUTOUPDATE:-}}" ]]; then
+  bash "$here/update-codex" --daily --apply >&2 || true
+fi
+
+mkdir -p "$(dirname "$out")" 2>/dev/null || true
+out_dir="$(cd "$(dirname "$out")" 2>/dev/null && pwd)" || {
+  echo "chatgpt-image: cannot create output dir: $(dirname "$out")" >&2; exit 2; }
+out="$out_dir/$(basename "$out")"
+stem="${out%.*}"
+
+workdir="$(mktemp -d "${TMPDIR:-/tmp}/chatgpt-image.XXXXXX")"
+log="${workdir}.jsonl"
+err="${workdir}.err"
+
+size_line=""
+[[ -n "$size" ]] && size_line="
+SIZE: ${size} (please produce this aspect ratio and resolution)"
+
+# Codex's sandbox may not read the caller's folders, so references are copied
+# into the workdir, attached with -i (the driver sees them) and named in
+# referenced_image_paths (the painter sees them).
+img_args=(); ref_list=""; n=0
+for r in ${refs[@]+"${refs[@]}"}; do
+  n=$((n+1))
+  ext="$(printf '%s' "${r##*.}" | tr '[:upper:]' '[:lower:]')"
+  if [[ "$ext" == "heic" || "$ext" == "heif" ]] && command -v sips >/dev/null 2>&1; then
+    # iPhone photos: the image tool wants png/jpg/webp.
+    local_name="ref${n}.jpg"
+    sips -s format jpeg "$r" --out "$workdir/$local_name" >/dev/null
+  else
+    local_name="ref${n}.${ext}"
+    cp "$r" "$workdir/$local_name"
+  fi
+  img_args+=(-i "$workdir/$local_name")
+  ref_list="${ref_list:+$ref_list, }$workdir/$local_name"
+done
+
+if [[ $n -eq 0 ]]; then
+  task="Use your built-in image_gen tool to create one brand new image.
+
+PROMPT: ${prompt}${size_line}
+
+Requirements:
+- You MUST call the built-in image_gen tool. Do not use any CLI fallback, Python script, curl, or OPENAI_API_KEY.
+- Do not pass referenced_image_paths or num_last_images_to_include; this is a new image."
+else
+  task="The ${n} attached image(s) are reference images, saved at: ${ref_list}
+
+Use your built-in image_gen tool to create one NEW image, and pass ALL of those paths in referenced_image_paths so the image model sees them.
+
+PROMPT: ${prompt}${size_line}
+
+Requirements:
+- If the references show a real person, that person supplied them for their own likeness: the new image MUST be recognisably the same individual (bone structure, jawline, eyes, nose, hairline, hair, skin tone). Do not beautify, de-age, or change their ethnicity.
+- Do not copy a reference's pose, background, framing or clothing unless the prompt asks for it.
+- You MUST call the built-in image_gen tool. Do not use any CLI fallback, Python script, curl, or OPENAI_API_KEY."
+fi
+full_prompt="${task}
+- After the tool returns, copy the generated PNG byte-for-byte to out.png in your current working directory (relative path out.png). Do NOT resize, re-encode or edit it.
+- Reply with only: out.png"
+
+# Driver chain: newest model first; fall through only on quota or availability.
+if [[ -n "$driver" ]]; then
+  models="$driver"
+else
+  models="${CHATGPT_IMAGE_DRIVERS:-${GPT_IMAGE_MODELS:-$(python3 "$here/resolve-drivers" 2>/dev/null || echo default)}}"
+fi
+effort="${CHATGPT_IMAGE_EFFORT:-low}"
+
+# Pin this one call to the ChatGPT login: the built-in OpenAI provider at its
+# default ChatGPT endpoint, API-key env vars removed, no MCP servers. A user's
+# own routing (a local proxy, a custom provider, an API key in the environment)
+# is bypassed for this call only; their config file is never edited. Measured
+# 2026-09-25: a config that routed codex through a local proxy made that proxy
+# answer with an API key (401) while `codex login status` still said ChatGPT.
+# SUBPOWERS_CODEX_KEEP_CONFIG=1 opts out and uses your codex config as-is.
+iso=(); cenv=(env -u OPENAI_API_KEY -u OPENAI_BASE_URL -u CODEX_API_KEY)
+if [[ -z "${SUBPOWERS_CODEX_KEEP_CONFIG:-}" ]]; then
+  iso=(-c 'model_provider="openai"' -c 'openai_base_url="https://chatgpt.com/backend-api/codex"' -c 'mcp_servers={}')
+else
+  cenv=()
+fi
+
+ok=""; used=""
+for m in ${models//:/ }; do
+  margs=(-c "model_reasoning_effort=\"${effort}\"")
+  [[ "$m" != "default" ]] && margs+=(-m "$m")
+  # ARG ORDER MATTERS: -i is variadic and swallows anything after it, so the
+  # prompt goes first and the image flags last (verified 2026-08-11).
+  if ${cenv[@]+"${cenv[@]}"} codex exec ${iso[@]+"${iso[@]}"} "${margs[@]}" --json --skip-git-repo-check -s workspace-write \
+       -C "$workdir" "$full_prompt" ${img_args[@]+"${img_args[@]}"} </dev/null >"$log" 2>"$err"; then
+    ok=1; used="$m"; break
+  fi
+  if grep -qiE "usage limit|usage_limit|rate_limit|out of room|context window|quota" "$log" "$err"; then
+    echo "chatgpt-image: driver '$m' is dry (quota), trying next..." >&2; continue
+  fi
+  if grep -qiE "model_not_found|does not exist|not supported|unsupported model|not available|newer version" "$log" "$err"; then
+    echo "chatgpt-image: driver '$m' is not available on this account or codex version, trying next..." >&2; continue
+  fi
+  break
+done
+
+if [[ -z "$ok" ]]; then
+  echo "chatgpt-image: codex exec failed (subscription lane may be dry). Tail:" >&2
+  tail -n 20 "$log" "$err" >&2
+  echo "(logs: $log $err)" >&2
+  exit 1
+fi
+
+# Pull what the image tool itself reported: savedPath, revisedPrompt, alpha.
+# `codex exec --json` stdout does NOT carry the image_gen result item (checked
+# 2026-09-23); the session rollout file does. Find it by thread id, else by
+# the unique workdir path.
+tid="$(grep -oE '"thread_?[iI]d" *: *"[0-9a-f-]{36}"' "$log" | head -n 1 | grep -oE '[0-9a-f-]{36}' || true)"
+rollout=""
+[[ -n "$tid" ]] && rollout="$(ls -t "${CODEX_HOME:-$HOME/.codex}"/sessions/*/*/*/*"${tid}".jsonl 2>/dev/null | head -n 1 || true)"
+[[ -z "$rollout" ]] && rollout="$(grep -l -F "$workdir" $(ls -t "${CODEX_HOME:-$HOME/.codex}"/sessions/*/*/*/*.jsonl 2>/dev/null | head -n 20) 2>/dev/null | head -n 1 || true)"
+meta="$(python3 - "${rollout:-$log}" <<'PY'
+import json, sys
+saved = revised = alpha = ""; calls = 0
+for line in open(sys.argv[1], errors="replace"):
+    try: ev = json.loads(line)
+    except Exception: continue
+    stack = [ev]
+    while stack:
+        o = stack.pop()
+        if isinstance(o, dict):
+            # codex 0.155 emits camelCase (kind image_gen.generation, savedPath,
+            # revisedPrompt); older builds used snake_case. Accept both.
+            sp = o.get("savedPath") or o.get("saved_path")
+            if sp or str(o.get("kind", "")).startswith("image_gen"):
+                if sp and sp != saved: saved = sp; calls += 1
+                rp = o.get("revisedPrompt") or o.get("revised_prompt")
+                if rp: revised = rp
+                for k in ("transparentBackground", "transparent_background"):
+                    if k in o: alpha = str(o[k])
+            stack.extend(o.values())
+        elif isinstance(o, list):
+            stack.extend(o)
+print(json.dumps({"saved": saved, "revised": revised, "alpha": alpha, "calls": calls}))
+PY
+)"
+field() { python3 -c 'import json,sys;print(json.loads(sys.argv[1])[sys.argv[2]])' "$meta" "$1"; }
+saved="$(field saved)"; revised="$(field revised)"; alpha="$(field alpha)"
+
+# Prefer the image tool's own file (untouched, carries OpenAI's C2PA
+# signature) over whatever the driver copied into the workdir.
+img=""
+if [[ -n "$saved" && -f "$saved" ]]; then img="$saved"
+elif [[ -f "$workdir/out.png" ]]; then img="$workdir/out.png"
+else img="$(ls -t "$workdir"/*.png 2>/dev/null | grep -v '/ref[0-9]' | head -n 1 || true)"; fi
+
+if [[ -z "$img" || ! -f "$img" ]]; then
+  echo "chatgpt-image: codex finished but no image_gen output was found. The tool may not have been called." >&2
+  tail -n 20 "$log" >&2
+  echo "(log: $log)" >&2
+  exit 1
+fi
+if [[ -z "$saved" ]]; then
+  echo "chatgpt-image: WARNING no image_gen result event in the log; this PNG may not come from the image model." >&2
+fi
+
+dims_of() {
+  if command -v sips >/dev/null 2>&1; then
+    sips -g pixelWidth -g pixelHeight "$1" 2>/dev/null | awk '/pixelWidth/{w=$2}/pixelHeight/{h=$2}END{if(w)print w"x"h}'
+  else
+    python3 -c 'import struct,sys;d=open(sys.argv[1],"rb").read(24);print("%dx%d"%struct.unpack(">II",d[16:24]))' "$1" 2>/dev/null
+  fi
+}
+
+cp "$img" "$out"
+raw_dims="$(dims_of "$out")"
+resized=""
+# The painter ignores exact pixel requests (square asks come back 1254x1254).
+# If --size was given and the aspect matches, keep the signed original beside
+# the file and resize the deliverable locally (free, lossless PNG).
+if [[ -n "$size" && -n "$raw_dims" && "$raw_dims" != "$size" ]]; then
+  rw="${raw_dims%x*}"; rh="${raw_dims#*x}"; sw="${size%x*}"; sh="${size#*x}"
+  if (( rw * sh == rh * sw )) && command -v sips >/dev/null 2>&1; then
+    cp "$out" "${stem}.original.png"
+    sips -z "$sh" "$sw" "$out" >/dev/null
+    resized="resized locally from ${raw_dims}; signed original kept at ${stem}.original.png"
+  elif (( rw * sh == rh * sw )); then
+    resized="NOT resized: painter returned ${raw_dims}; sips (macOS) is not available here"
+    echo "chatgpt-image: WARNING ${resized}" >&2
+  else
+    resized="NOT resized: painter returned ${raw_dims}, aspect differs from ${size}"
+    echo "chatgpt-image: WARNING ${resized}" >&2
+  fi
+fi
+bytes="$(wc -c <"$out" | tr -d ' ')"
+dims="$(dims_of "$out")"
+[[ -z "$dims" ]] && dims="unknown"
+
+# The PNG carries an OpenAI-signed C2PA manifest. Its softwareAgent is the only
+# on-file evidence of the painter; today it says only "ChatGPT / gpt-image".
+c2pa_src="$out"; [[ -f "${stem}.original.png" && -n "$resized" ]] && c2pa_src="${stem}.original.png"
+c2pa="$(python3 - "$c2pa_src" <<'PY'
+import sys
+d = open(sys.argv[1], "rb").read()
+def cbor_text(buf, i):
+    b = buf[i]
+    if 0x60 <= b <= 0x77: n = b - 0x60; return buf[i+1:i+1+n].decode("utf-8", "replace")
+    if b == 0x78: n = buf[i+1]; return buf[i+2:i+2+n].decode("utf-8", "replace")
+    return ""
+j = d.find(b"softwareAgent")
+if j < 0: print("none"); sys.exit()
+seg = d[j:j+200]; name = ver = ""
+k = seg.find(b"name");    name = cbor_text(seg, k+4) if k >= 0 else ""
+k = seg.find(b"version"); ver  = cbor_text(seg, k+7) if k >= 0 else ""
+signer = "OpenAI" if b"OpenAI OpCo" in d else "unknown signer"
+print(f"{name}/{ver} (signed by {signer})")
+PY
+)"
+painter="OpenAI's current ChatGPT image model, chosen server-side (last confirmed: GPT Image 2.5, rolled to Codex 2026-09-08; flare vs sunburst is not visible on this path) | C2PA says: ${c2pa}"
+{
+  echo "PROMPT (as given):"
+  echo "$prompt"
+  echo
+  echo "REVISED PROMPT (as returned by the image tool):"
+  echo "${revised:-<none reported>}"
+  echo
+  echo "provenance:"
+  echo "  door: subpowers/bin/chatgpt-image ($here)"
+  echo "  date: $(date '+%Y-%m-%d %H:%M:%S %z')"
+  echo "  codex: $(codex --version 2>/dev/null)"
+  echo "  driver model: ${used} (chain: ${models}; reasoning ${effort})"
+  echo "  image model: ${painter}"
+  echo "  references: ${n}${refs[0]+ ($(printf '%s ' "${refs[@]}"))}"
+  echo "  requested size: ${size:-model choice}"
+  echo "  painter size: ${raw_dims:-unknown}"
+  echo "  delivered size: ${dims}${resized:+ (${resized})}"
+  echo "  codex rollout: ${rollout:-<not found>}"
+  echo "  transparent_background reported: ${alpha:-n/a}"
+  echo "  image_gen saved_path: ${saved:-<not reported>}"
+  echo "  bytes: ${bytes}"
+} > "${stem}.prompt.txt"
+
+echo "chatgpt-image: painted by OpenAI's current image model (C2PA: ${c2pa}); driver=${used}; refs=${n}; size=${dims}" >&2
+rm -rf "$workdir" "$log" "$err" 2>/dev/null || true
+echo "$out"

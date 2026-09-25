@@ -1,0 +1,433 @@
+#!/usr/bin/env bash
+# antigravity-image: make an image with Google's Gemini image model ("Nano Banana")
+# through the Antigravity CLI (`agy`), paid for by the logged-in Antigravity / Google
+# AI subscription (OAuth). No API key: GEMINI_API_KEY / GOOGLE_API_KEY / Vertex
+# selectors are scrubbed from agy's environment. The Antigravity painter of subpowers
+# (https://github.com/itsluisc/subpowers); same contract as bin/chatgpt-image.
+#
+# WHO PAINTS (read from agy 1.2.11 on 2026-09-25, not guessed):
+#   painter  agy's built-in `generate_image` tool. Its arguments are Prompt,
+#            ImageName, ImagePaths (max 3 references) and AspectRatio
+#            (1:1 2:3 3:2 3:4 4:3 9:16 16:9). There is NO model argument: the
+#            Antigravity backend names the image model in its fetchAvailableModels
+#            reply (imageGenerationModelIds), so the painter is SERVER-CHOSEN and
+#            this door cannot pin or downgrade it. On 2026-09-25 every run recorded
+#            model_name "gemini-3.1-flash-image" in the step, which is Gemini 3.1
+#            Flash Image = Nano Banana 2 (GA 2026-05-28 per Google's model page).
+#            The door reads that name back out of the conversation store after
+#            every run and writes it into the sidecar, so a server-side switch
+#            shows up the same day.
+#   driver   the chat model that calls the tool (`agy --model`), picked per call
+#            from `agy models`: the newest gemini-X-flash at AGY_IMAGE_EFFORT
+#            (default low; the driver only relays the prompt), then the next
+#            newest, then agy's default. Fall-through only on quota / capacity /
+#            unknown-model errors.
+#
+# WHY AN ISOLATED PROFILE: agy's global profile starts every MCP server you have
+# configured (~30 on the machine this was built on). The door runs agy with --gemini_dir pointed at a
+# fresh temp profile with ZERO MCP servers and agy's --sandbox on. Measured
+# 2026-09-25: 76 s wall in the global profile vs 23 s isolated, same image.
+#
+# WHAT COMES BACK: a JPEG, 1024x1024 at 1:1 (1376x768 at 16:9), signed with a Google
+# C2PA manifest ("Created by Google Generative AI" + "Applied imperceptible SynthID
+# watermark"). No size/quality/4K argument exists on this path. For a .png output the
+# door converts locally and keeps the signed JPEG as <out>.original.jpg. --size maps
+# to the nearest supported aspect ratio, then the door center-crops (up to 8% off-aspect,
+# which covers 4:5 from 3:4) and
+# resizes locally; larger-than-painter sizes are a local upscale and are labelled so.
+#
+# Usage:
+#   antigravity-image "<prompt>" <out.png|out.jpg> [--size WxH] [--aspect R]
+#                     [--ref IMG]... [--driver MODEL]
+#
+#   --ref     a reference image the painter must see (max 3, the tool's limit).
+#   --aspect  one of 1:1 2:3 3:2 3:4 4:3 9:16 16:9 (default: from --size, else 1:1).
+#   --driver  pin one driver model id from `agy models` instead of the chain.
+#
+# Env: AGY_IMAGE_DRIVERS="a:b:default" overrides the chain. AGY_IMAGE_EFFORT
+#      (low|medium|high) picks the driver variant. AGY_IMAGE_TIMEOUT seconds (600).
+#      AGY_IMAGE_KEEP_WORKDIR=1 keeps the temp profile. Optional: if a capacity-lease
+#      helper exists at $AGY_LEASE_BIN, runs queue through it (AGY_IMAGE_NO_LEASE=1 skips).
+#
+# Writes <out>.prompt.txt (your prompt + the prompt the tool received + provenance)
+# beside every image. Prints the output path on stdout; provenance on stderr.
+# Exit codes: 2 usage, 3 not logged in, 75 lease busy, 127 agy missing, 1 other.
+set -euo pipefail
+
+src="${BASH_SOURCE[0]}"
+while [[ -L "$src" ]]; do
+  d="$(cd "$(dirname "$src")" && pwd)"; src="$(readlink "$src")"
+  [[ "$src" != /* ]] && src="$d/$src"
+done
+here="$(cd "$(dirname "$src")" && pwd)"
+me="antigravity-image"
+
+usage() { echo "usage: $me \"<prompt>\" <out.png|out.jpg> [--size WxH] [--aspect R] [--ref IMG]... [--driver MODEL]" >&2; exit 2; }
+[[ $# -lt 2 ]] && usage
+
+prompt="$1"; out="$2"; shift 2
+size=""; aspect=""; driver=""; refs=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --size)   [[ $# -ge 2 ]] || usage; size="$2"; shift 2 ;;
+    --aspect) [[ $# -ge 2 ]] || usage; aspect="$2"; shift 2 ;;
+    --driver) [[ $# -ge 2 ]] || usage; driver="$2"; shift 2 ;;
+    --ref)    [[ $# -ge 2 ]] || usage; refs+=("$2"); shift 2 ;;
+    -h|--help) usage ;;
+    *) echo "$me: unknown arg: $1 (see header for what this path supports)" >&2; exit 2 ;;
+  esac
+done
+
+[[ -n "$prompt" ]] || { echo "$me: empty prompt" >&2; exit 2; }
+if [[ -n "$size" && ! "$size" =~ ^[0-9]+x[0-9]+$ ]]; then
+  echo "$me: --size must look like 1024x1024" >&2; exit 2
+fi
+case "$aspect" in
+  ""|1:1|2:3|3:2|3:4|4:3|9:16|16:9) ;;
+  *) echo "$me: --aspect must be one of 1:1 2:3 3:2 3:4 4:3 9:16 16:9 (the tool's enum)" >&2; exit 2 ;;
+esac
+nrefs=0
+for r in ${refs[@]+"${refs[@]}"}; do
+  [[ -f "$r" ]] || { echo "$me: missing --ref file: $r" >&2; exit 2; }
+  nrefs=$((nrefs+1))
+done
+if (( nrefs > 3 )); then
+  echo "$me: generate_image accepts at most 3 reference images (got $nrefs)" >&2; exit 2
+fi
+
+out_ext="$(printf '%s' "${out##*.}" | tr '[:upper:]' '[:lower:]')"
+case "$out_ext" in
+  png|jpg|jpeg) ;;
+  *) echo "$me: output must end in .png, .jpg or .jpeg" >&2; exit 2 ;;
+esac
+
+AGY="${AGY_BIN:-$(command -v agy 2>/dev/null || echo "$HOME/.local/bin/agy")}"
+[[ -x "$AGY" ]] || {
+  echo "$me: agy (Antigravity CLI) not found. Install: curl -fsSL https://antigravity.google/cli/install.sh | bash, then run agy once to log in" >&2; exit 127; }
+
+# --size without --aspect: nearest supported ratio (log distance).
+if [[ -z "$aspect" && -n "$size" ]]; then
+  aspect="$(python3 - "$size" <<'PY'
+import math, sys
+w, h = (int(x) for x in sys.argv[1].split("x"))
+opts = ["1:1", "2:3", "3:2", "3:4", "4:3", "9:16", "16:9"]
+def r(s): a, b = s.split(":"); return int(a) / int(b)
+print(min(opts, key=lambda s: abs(math.log((w / h) / r(s)))))
+PY
+)"
+fi
+[[ -z "$aspect" ]] && aspect="1:1"
+
+mkdir -p "$(dirname "$out")" 2>/dev/null || true
+out_dir="$(cd "$(dirname "$out")" 2>/dev/null && pwd)" || {
+  echo "$me: cannot create output dir: $(dirname "$out")" >&2; exit 2; }
+out="$out_dir/$(basename "$out")"
+stem="${out%.*}"
+
+# ---- isolated agy profile: static config only, zero MCP servers -------------
+tmpbase="${TMPDIR:-/tmp}"; tmpbase="${tmpbase%/}"
+root="$(mktemp -d "$tmpbase/antigravity-image.XXXXXX")"
+profile="$root/profile"; work="$root/work"; atmp="$root/tmp"; shim="$root/no-browser"
+mkdir -p "$profile/config/projects" "$work" "$atmp" "$shim"
+[[ -f "$HOME/.gemini/config/config.json" ]] && cp "$HOME/.gemini/config/config.json" "$profile/config/config.json"
+[[ -f "$HOME/.gemini/config/projects/default-cli-project.json" ]] && \
+  cp "$HOME/.gemini/config/projects/default-cli-project.json" "$profile/config/projects/default-cli-project.json"
+printf '{"mcpServers":{}}\n' > "$profile/config/mcp_config.json"
+# If OAuth is broken agy may try to open a login page; refuse loudly instead.
+printf '#!/bin/sh\necho "[antigravity-image] browser launch blocked: agy wants a login. Run agy once in a terminal." >&2\nexit 88\n' > "$shim/open"
+chmod 700 "$shim/open"
+log="$root/agy.jsonl"; err="$root/agy.err"
+
+agy_env() {
+  env -u GEMINI_API_KEY -u GOOGLE_API_KEY -u GOOGLE_GENAI_USE_VERTEXAI \
+      -u GOOGLE_APPLICATION_CREDENTIALS -u GOOGLE_CLOUD_PROJECT \
+      TMPDIR="$atmp" BROWSER="$shim/open" PATH="$shim:$PATH" "$@"
+}
+
+# ---- login check + driver chain (agy's own model list, newest first) --------
+models_out="$(cd "$work" && agy_env "$AGY" --gemini_dir="$profile" models 2>&1 || true)"
+if ! grep -qE '^gemini-[0-9]' <<<"$models_out"; then
+  echo "$me: agy returned no models; it is probably not logged in. Run \`agy\` once in a terminal to sign in." >&2
+  printf '%s\n' "$models_out" | tail -n 5 >&2
+  echo "(workdir kept: $root)" >&2
+  exit 3
+fi
+effort="${AGY_IMAGE_EFFORT:-low}"
+if [[ -n "$driver" ]]; then
+  chain="$driver"
+elif [[ -n "${AGY_IMAGE_DRIVERS:-}" ]]; then
+  chain="$AGY_IMAGE_DRIVERS"
+else
+  chain="$(printf '%s\n' "$models_out" | python3 -c '
+import re, sys
+effort = sys.argv[1]
+ids = [l.split("\t")[0].strip() for l in sys.stdin if l.startswith("gemini-")]
+flash = {}
+for i in ids:
+    m = re.fullmatch(r"gemini-(\d+(?:\.\d+)*)-flash-(low|medium|high)", i)
+    if m: flash.setdefault(tuple(int(x) for x in m.group(1).split(".")), {})[m.group(2)] = i
+chain = []
+for v in sorted(flash, reverse=True)[:2]:
+    pick = flash[v].get(effort) or flash[v].get("low") or next(iter(flash[v].values()))
+    chain.append(pick)
+chain.append("default")
+print(":".join(chain))
+' "$effort")"
+fi
+
+# ---- references: copied into the workspace so the tool can always read them ----
+ref_list=""; n=0
+for r in ${refs[@]+"${refs[@]}"}; do
+  n=$((n+1))
+  ext="$(printf '%s' "${r##*.}" | tr '[:upper:]' '[:lower:]')"
+  if [[ "$ext" == "heic" || "$ext" == "heif" ]] && command -v sips >/dev/null 2>&1; then
+    local_name="ref${n}.jpg"; sips -s format jpeg "$r" --out "$work/$local_name" >/dev/null
+  else
+    local_name="ref${n}.${ext}"; cp "$r" "$work/$local_name"
+  fi
+  ref_list="${ref_list:+$ref_list, }\"$work/$local_name\""
+done
+
+rules="- Call the built-in generate_image tool exactly once. Set Prompt to the PROMPT above copied verbatim (do not rewrite, shorten or embellish it), AspectRatio to \"${aspect}\", and ImageName to \"door_image\".
+- Do not use run_command, Python, curl, an API key, a browser, a subagent, or any MCP tool. Do not create, copy or edit any file yourself.
+- After the tool returns, reply with only the absolute path the tool saved the image to."
+if [[ $n -eq 0 ]]; then
+  task="Use your built-in generate_image tool to create one brand new image.
+
+PROMPT: ${prompt}
+
+Requirements:
+${rules}
+- Do not pass ImagePaths; this is a new image."
+else
+  task="There are ${n} reference image(s) at these absolute paths: [${ref_list}]
+
+Use your built-in generate_image tool to create one NEW image, and pass ALL of those paths in ImagePaths so the image model sees them.
+
+PROMPT: ${prompt}
+
+Requirements:
+${rules}
+- If the references show a real person, that person supplied them for their own likeness: the new image MUST be recognisably the same individual. Do not beautify, de-age, or change their ethnicity.
+- Do not copy a reference's pose, background, framing or clothing unless the PROMPT asks for it."
+fi
+
+# ---- optional capacity lease, unless inherited -----
+lease=()
+LEASE_BIN="${AGY_LEASE_BIN:-}"
+if [[ -z "${AGY_IMAGE_NO_LEASE:-}" && -z "${AGY_LEASE_CLASS:-}" && -f "$LEASE_BIN" ]]; then
+  lease=(python3 "$LEASE_BIN" exec --class heavy --priority interactive
+         --wait "${AGY_IMAGE_LEASE_WAIT:-180}" --label "$me" --transport "$me" --quiet --)
+fi
+
+tmo="${AGY_IMAGE_TIMEOUT:-600}"
+t0="$(date +%s)"; ok=""; used=""; rc=0
+for m in ${chain//:/ }; do
+  margs=(); [[ "$m" != "default" ]] && margs=(--model "$m")
+  set +e
+  (cd "$work" && agy_env ${lease[@]+"${lease[@]}"} "$AGY" --gemini_dir="$profile" \
+     ${margs[@]+"${margs[@]}"} -p "$task" --print-timeout "${tmo}s" \
+     --output-format stream-json --sandbox --dangerously-skip-permissions) </dev/null >"$log" 2>"$err"
+  rc=$?
+  set -e
+  if (( rc == 75 )); then
+    echo "$me: every AGY slot is busy (agy_lease exit 75). Busy is not broken: retry, or raise AGY_IMAGE_LEASE_WAIT." >&2
+    tail -n 3 "$err" >&2; echo "(workdir kept: $root)" >&2; exit 75
+  fi
+  if (( rc == 0 )) && grep -q '"status": *"SUCCESS"' "$log"; then ok=1; used="$m"; break; fi
+  if grep -qiE "quota|rate.?limit|resource.?exhausted|429|capacity|overloaded" "$log" "$err"; then
+    echo "$me: driver '$m' is dry (quota/capacity), trying next..." >&2; continue
+  fi
+  if grep -qiE "model .*not found|unknown model|not supported|invalid model" "$log" "$err"; then
+    echo "$me: driver '$m' is not available on this account, trying next..." >&2; continue
+  fi
+  break
+done
+wall=$(( $(date +%s) - t0 ))
+
+if [[ -z "$ok" ]]; then
+  echo "$me: agy run failed (rc=$rc). Tail:" >&2
+  tail -n 15 "$log" "$err" >&2
+  echo "(workdir kept: $root)" >&2
+  exit 1
+fi
+
+# ---- what the tool itself did: args, saved file, painter model ----------------
+meta="$(python3 - "$log" "$profile" <<'PY'
+import glob, json, os, re, sys
+log, profile = sys.argv[1], sys.argv[2]
+cid = ""; tool_s = ""; response = ""
+for line in open(log, errors="replace"):
+    try: ev = json.loads(line)
+    except Exception: continue
+    for k in ("init", "result", "step_update"):
+        v = ev.get(k)
+        if isinstance(v, dict) and v.get("conversation_id"): cid = cid or v["conversation_id"]
+    su = ev.get("step_update") or {}
+    if su.get("tool_name") == "generate_image" and su.get("state") == "DONE":
+        tool_s = su.get("duration_seconds", tool_s)
+    if ev.get("result"): response = ev["result"].get("response", "")
+brain = os.path.join(profile, "antigravity-cli", "brain", cid)
+calls = []; media = []
+tf = os.path.join(brain, ".system_generated", "logs", "transcript_full.jsonl")
+if cid and os.path.exists(tf):
+    for line in open(tf, errors="replace"):
+        try: st = json.loads(line)
+        except Exception: continue
+        for tc in st.get("tool_calls") or []:
+            if tc.get("name") == "generate_image": calls.append(tc.get("args") or {})
+        for md in st.get("media") or []:
+            u = md.get("uri", "")
+            if str(md.get("mime_type", "")).startswith("image/") and u.startswith("file://"):
+                media.append(u[7:])
+saved = next((p for p in reversed(media) if os.path.isfile(p)), "")
+if not saved and cid:
+    imgs = [p for p in glob.glob(os.path.join(brain, "*")) if p.lower().endswith((".jpg", ".jpeg", ".png", ".webp"))]
+    if imgs: saved = max(imgs, key=os.path.getmtime)
+# The step record in the conversation store carries model_name as a
+# length-prefixed protobuf string; read it back exactly, never by pattern alone.
+models = []
+db = os.path.join(profile, "antigravity-cli", "conversations", cid + ".db")
+if cid and os.path.exists(db):
+    blob = b""
+    for f in (db, db + "-wal"):
+        if os.path.exists(f): blob += open(f, "rb").read()
+    for m in re.finditer(rb"gemini-[0-9][0-9a-z.\-]*image", blob):
+        s = m.start(); n = blob[s - 1] if s else 0
+        name = blob[s:s + n].decode("ascii", "replace") if 10 <= n <= 60 else m.group().decode()
+        if re.fullmatch(r"gemini-[0-9a-z.\-]+", name) and name not in models: models.append(name)
+last = calls[-1] if calls else {}
+print(json.dumps({"cid": cid, "calls": len(calls), "saved": saved, "tool_s": tool_s,
+                  "passed_prompt": last.get("Prompt", ""), "passed_aspect": last.get("AspectRatio", ""),
+                  "passed_refs": last.get("ImagePaths", []), "models": models, "response": response.strip()}))
+PY
+)"
+field() { python3 -c 'import json,sys;v=json.loads(sys.argv[1])[sys.argv[2]];print(", ".join(v) if isinstance(v,list) else v)' "$meta" "$1"; }
+cid="$(field cid)"; calls="$(field calls)"; img="$(field saved)"; tool_s="$(field tool_s)"
+passed_prompt="$(field passed_prompt)"; passed_aspect="$(field passed_aspect)"
+passed_refs="$(field passed_refs)"; painter_ids="$(field models)"
+
+if [[ -z "$img" || ! -f "$img" ]]; then
+  echo "$me: agy finished but no generate_image output was found (tool calls seen: ${calls}). The tool may not have been called." >&2
+  tail -n 10 "$log" >&2; echo "(workdir kept: $root)" >&2
+  exit 1
+fi
+if [[ "$calls" == "0" ]]; then
+  echo "$me: WARNING no generate_image call in the transcript; this file may not come from the image model." >&2
+elif [[ "$calls" != "1" ]]; then
+  echo "$me: WARNING the driver called generate_image ${calls} times; delivering the last image." >&2
+fi
+if (( n > 0 )) && [[ -z "$passed_refs" ]]; then
+  echo "$me: WARNING ${n} reference(s) given but the tool call carried no ImagePaths." >&2
+fi
+
+dims_of() { sips -g pixelWidth -g pixelHeight "$1" 2>/dev/null | awk '/pixelWidth/{w=$2}/pixelHeight/{h=$2}END{if(w)print w"x"h}'; }
+src_ext="$(printf '%s' "${img##*.}" | tr '[:upper:]' '[:lower:]')"
+[[ "$src_ext" == "jpeg" ]] && src_ext="jpg"
+raw_dims="$(dims_of "$img")"
+
+# Deliver: same format = byte-for-byte copy; otherwise convert and keep the
+# signed original beside it (the C2PA manifest lives only in the original).
+# sips writes JPEG at "normal" quality unless told otherwise; ask for best.
+jq=(); [[ "$out_ext" == "jpg" || "$out_ext" == "jpeg" ]] && jq=(-s formatOptions best)
+original=""
+if [[ "$out_ext" == "jpeg" ]]; then want="jpg"; else want="$out_ext"; fi
+if [[ "$want" == "$src_ext" ]]; then
+  cp "$img" "$out"
+else
+  original="${stem}.original.${src_ext}"
+  cp "$img" "$original"
+  fmt="$want"; [[ "$fmt" == "jpg" ]] && fmt="jpeg"
+  sips -s format "$fmt" ${jq[@]+"${jq[@]}"} "$img" --out "$out" >/dev/null
+fi
+
+resized=""
+if [[ -n "$size" && -n "$raw_dims" && "$raw_dims" != "$size" ]]; then
+  plan="$(python3 - "$raw_dims" "$size" <<'PY'
+import math, sys
+rw, rh = (int(x) for x in sys.argv[1].split("x")); sw, sh = (int(x) for x in sys.argv[2].split("x"))
+off = abs(math.log((rw / rh) / (sw / sh)))
+if off > 0.08: print("skip %.1f" % (off * 100)); sys.exit()
+if rw / rh > sw / sh: cw, ch = round(rh * sw / sh), rh
+else: cw, ch = rw, round(rw * sh / sw)
+trim = 100.0 * (1 - (cw * ch) / (rw * rh))
+print("do %d %d %s %.1f" % (ch, cw, "up" if sw > cw or sh > ch else "down", trim))
+PY
+)"
+  if [[ "$plan" == do* ]]; then
+    read -r _ ch cw dir trim <<<"$plan"
+    if [[ -z "$original" ]]; then original="${stem}.original.${src_ext}"; cp "$img" "$original"; fi
+    [[ "${ch}x${cw}" != "${raw_dims#*x}x${raw_dims%x*}" ]] && sips ${jq[@]+"${jq[@]}"} -c "$ch" "$cw" "$out" >/dev/null
+    sips ${jq[@]+"${jq[@]}"} -z "${size#*x}" "${size%x*}" "$out" >/dev/null
+    resized="center-cropped to ${cw}x${ch} (trimmed ${trim}% of the frame) and resized locally from ${raw_dims}"
+    [[ "$dir" == "up" ]] && resized="${resized} (LOCAL UPSCALE: the painter's native size is ${raw_dims})"
+    resized="${resized}; signed original kept at ${original}"
+  else
+    resized="NOT resized: painter returned ${raw_dims} for aspect ${aspect}, which is ${plan#skip }% off ${size}"
+    echo "$me: WARNING ${resized}" >&2
+  fi
+fi
+bytes="$(wc -c <"$out" | tr -d ' ')"
+dims="$(dims_of "$out")"; [[ -z "$dims" ]] && dims="unknown"
+
+c2pa_src="${original:-$out}"
+c2pa="$(python3 - "$c2pa_src" <<'PY'
+import re, sys
+d = open(sys.argv[1], "rb").read()
+if b"c2pa" not in d: print("none"); sys.exit()
+signer = "Google LLC" if b"Google C2PA" in d else "unknown signer"
+gen = re.search(rb"Google C2PA Core Generator Library", d)
+acts = [a.decode() for a in re.findall(rb"(Created by Google Generative AI|Applied imperceptible SynthID watermark)", d)]
+print("%s; actions: %s (signed by %s)" % ("Google C2PA Core Generator Library" if gen else "claim present",
+                                        " + ".join(dict.fromkeys(acts)) or "n/a", signer))
+PY
+)"
+
+label_for() {
+  case "$1" in
+    gemini-3.1-flash-image*) echo "Gemini 3.1 Flash Image = Nano Banana 2" ;;
+    gemini-3-pro-image*)     echo "Gemini 3 Pro Image = Nano Banana Pro" ;;
+    gemini-2.5-flash-image*) echo "Gemini 2.5 Flash Image = Nano Banana" ;;
+    *) echo "$1" ;;
+  esac
+}
+if [[ -n "$painter_ids" ]]; then
+  first="${painter_ids%%,*}"
+  painter="${painter_ids} ($(label_for "$first")), chosen server-side by Antigravity; recorded in the step record"
+else
+  painter="not recorded in the step (server-chosen; last seen 2026-09-25: gemini-3.1-flash-image)"
+fi
+
+{
+  echo "PROMPT (as given):"
+  echo "$prompt"
+  echo
+  echo "PROMPT (as the generate_image tool received it):"
+  echo "${passed_prompt:-<not found in transcript>}"
+  echo
+  echo "provenance:"
+  echo "  door: antigravity-image ($here)"
+  echo "  date: $(date '+%Y-%m-%d %H:%M:%S %z')"
+  echo "  agy: $("$AGY" --version 2>/dev/null | head -n 1)"
+  echo "  auth: Antigravity OAuth subscription, isolated profile, zero MCP servers, no API key"
+  echo "  driver model: ${used} (chain: ${chain}; effort ${effort})"
+  echo "  image model: ${painter}"
+  echo "  C2PA: ${c2pa}"
+  echo "  generate_image calls: ${calls}; tool time: ${tool_s}s; door wall: ${wall}s"
+  echo "  aspect requested: ${aspect}; aspect passed: ${passed_aspect:-<default 1:1>}"
+  echo "  references: ${n}${refs[0]+ ($(printf '%s ' "${refs[@]}"))}; passed ImagePaths: ${passed_refs:-none}"
+  echo "  requested size: ${size:-model choice}"
+  echo "  painter size: ${raw_dims:-unknown} (${src_ext})"
+  echo "  delivered size: ${dims}${resized:+ (${resized})}"
+  [[ -n "$original" ]] && echo "  signed original: ${original}"
+  echo "  agy conversation: ${cid}"
+  echo "  bytes: ${bytes}"
+} > "${stem}.prompt.txt"
+
+echo "$me: painted by ${painter_ids:-server-chosen model}; driver=${used}; refs=${n}; ${dims}; ${wall}s" >&2
+if [[ -z "${AGY_IMAGE_KEEP_WORKDIR:-}" ]]; then
+  rm -rf "$root" 2>/dev/null || true   # only the temp profile this run created
+else
+  echo "$me: workdir kept: $root" >&2
+fi
+echo "$out"

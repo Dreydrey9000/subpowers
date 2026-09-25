@@ -1,0 +1,130 @@
+#!/usr/bin/env bash
+# doctor: which subpowers work on this machine, and exactly what to fix.
+#
+# Usage: subpowers doctor [--fix] [--smoke]
+#   --fix    run `codex update` when the ChatGPT painter's CLI is behind
+#   --smoke  also make one real test image per connected painter (uses your plan's quota)
+# Exit 0 when at least one painter is ready.
+set -uo pipefail
+
+src="${BASH_SOURCE[0]}"
+while [[ -L "$src" ]]; do
+  d="$(cd "$(dirname "$src")" && pwd)"; src="$(readlink "$src")"
+  [[ "$src" != /* ]] && src="$d/$src"
+done
+here="$(cd "$(dirname "$src")" && pwd)"
+skill="$(cd "$here/.." && pwd)"
+
+fix=""; smoke=""
+for a in "$@"; do
+  case "$a" in
+    --fix) fix=1 ;;
+    --smoke) smoke=1 ;;
+    *) echo "usage: subpowers doctor [--fix] [--smoke]" >&2; exit 2 ;;
+  esac
+done
+
+pass() { printf '  PASS  %s\n' "$1"; }
+warn() { printf '  WARN  %s\n' "$1"; }
+info() { printf '  INFO  %s\n' "$1"; }
+fail() { printf '  FAIL  %s\n' "$1"; }
+off()  { printf '  OFF   %s\n' "$1"; }
+ready=()
+
+echo "subpowers doctor ($skill)"
+if command -v python3 >/dev/null 2>&1; then pass "python3: $(python3 --version 2>&1)"
+else fail "python3 missing -> xcode-select --install (macOS) or install Python 3"; fi
+if command -v sips >/dev/null 2>&1; then pass "sips present (exact sizes and png conversion work)"
+else warn "sips missing (not macOS): exact --size is not enforced; ask for .jpg from the antigravity painter"; fi
+
+echo "ChatGPT painter (OpenAI image model, your ChatGPT plan)"
+if ! command -v codex >/dev/null 2>&1; then
+  off "codex CLI not installed -> npm install -g @openai/codex   (or: brew install codex)"
+else
+  cg_ok=1
+  pass "codex CLI: $(codex --version 2>/dev/null) at $(command -v codex)"
+  if [[ -n "$fix" ]]; then msg="$(bash "$here/update-codex" --apply 2>&1)"; rc=$?
+  else msg="$(bash "$here/update-codex" 2>&1)"; rc=$?; fi
+  msg="$(printf '%s' "$msg" | tail -n 1)"
+  case $rc in
+    0) pass "$msg" ;;
+    1) warn "$msg  (subpowers doctor --fix runs it; the painter also does it once a day)" ;;
+    *) warn "$msg" ;;
+  esac
+  if codex login status 2>&1 | grep -qi "chatgpt"; then
+    pass "login stored: ChatGPT (your plan pays; no API key)"
+    # A stored login is not a working login: ask OpenAI one tiny question, the
+    # same way the painter does, and only PASS on a real answer.
+    ldir="$(mktemp -d "${TMPDIR:-/tmp}/subpowers-live.XXXXXX")"
+    live="$(cd "$ldir" && perl -e 'alarm shift; exec @ARGV' "${SUBPOWERS_LIVE_TIMEOUT:-120}" \
+      env -u OPENAI_API_KEY -u OPENAI_BASE_URL -u CODEX_API_KEY codex exec \
+      -c 'model_provider="openai"' -c 'openai_base_url="https://chatgpt.com/backend-api/codex"' \
+      -c 'mcp_servers={}' -c 'model_reasoning_effort="low"' --json --skip-git-repo-check \
+      "Reply with exactly: pong" </dev/null 2>/dev/null || true)"
+    if grep -q '"turn.completed"' <<<"$live"; then
+      pass "live check: ChatGPT answered a real request"
+    else
+      why="$(printf '%s\n' "$live" | python3 -c '
+import json, re, sys
+msg = ""
+for line in sys.stdin:
+    try: e = json.loads(line)
+    except Exception: continue
+    if e.get("type") == "turn.failed": msg = (e.get("error") or {}).get("message", "")
+    elif e.get("type") == "error" and not msg: msg = e.get("message", "")
+msg = re.sub(r"sk-[A-Za-z0-9*_-]{4,}", "sk-***", msg)
+print((msg or "no answer before the timeout").split(", url:")[0][:160])' 2>/dev/null)"
+      fail "live check: OpenAI rejected a real request (${why}) -> codex logout && codex login"
+      cg_ok=""
+    fi
+  else
+    fail "not logged in with ChatGPT -> codex login   (choose Sign in with ChatGPT)"; cg_ok=""
+  fi
+  if codex features list 2>/dev/null | awk '$1=="image_generation"{print $NF}' | grep -q true; then pass "image_generation feature is on"
+  else fail "image_generation feature is off -> codex features enable image_generation"; cg_ok=""; fi
+  chain="$(python3 "$here/resolve-drivers" 2>/dev/null)"
+  if [[ "$chain" == "default" ]]; then warn "no codex model list yet (it appears after the first codex run); using codex's default"
+  else pass "helper models, newest first: ${chain//:/ > }"; fi
+  info "painter = OpenAI's current image model, chosen by OpenAI on every call"
+  [[ -n "$cg_ok" ]] && ready+=(chatgpt)
+fi
+
+echo "Antigravity painter (Google Nano Banana 2, your Google AI plan)"
+AGY="$(command -v agy 2>/dev/null || true)"; [[ -z "$AGY" && -x "$HOME/.local/bin/agy" ]] && AGY="$HOME/.local/bin/agy"
+if [[ -z "$AGY" ]]; then
+  off "Antigravity CLI not installed -> curl -fsSL https://antigravity.google/cli/install.sh | bash   then run agy once"
+else
+  pass "agy: $("$AGY" --version 2>/dev/null | head -n 1) at $AGY"
+  models="$("$AGY" models 2>&1 || true)"
+  if grep -qE '^gemini-[0-9]' <<<"$models"; then
+    newest="$(printf '%s\n' "$models" | grep -oE '^gemini-[0-9][0-9.]*-flash-low' | sort -t- -k2,2Vr | head -n 1)"
+    pass "logged in (helper model: ${newest:-agy default})"
+    info "painter = Google's image model, chosen by Google on every call (Nano Banana 2 as of 2026-09)"
+    ready+=(antigravity)
+  else
+    fail "agy is installed but not logged in -> run agy once in a terminal and sign in"
+  fi
+fi
+
+echo "Where agents find it"
+for d in "$HOME/.claude/skills/subpowers" "$HOME/.agents/skills/subpowers" "$HOME/.codex/skills/subpowers"; do
+  if [[ -f "$d/SKILL.md" ]]; then pass "$d"; else warn "not linked at $d (bash install.sh links it)"; fi
+done
+if command -v subpowers >/dev/null 2>&1; then pass "subpowers command on PATH"
+else warn "subpowers command not on PATH (agents can still run $here/subpowers; add ~/.local/bin to PATH to type it)"; fi
+
+if [[ -n "$smoke" ]]; then
+  for p in ${ready[@]+"${ready[@]}"}; do
+    out="${TMPDIR:-/tmp}/subpowers-smoke-$p.png"
+    echo "  ....  $p: making one test image"
+    if got="$(bash "$here/${p}-image" "a red ceramic coffee mug on a white table, soft window light, product photo, no text" "$out")"; then
+      pass "$p smoke image: $got (receipt: ${got%.*}.prompt.txt)"
+    else
+      fail "$p smoke image failed (see the error above)"
+    fi
+  done
+fi
+
+if [[ ${#ready[@]} -gt 0 ]]; then echo "READY: your agents can make images with: ${ready[*]}"; exit 0; fi
+echo "NOT READY: connect at least one painter (see the FAIL/OFF lines), then run subpowers doctor again."
+exit 1

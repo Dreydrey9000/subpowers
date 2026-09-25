@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+# subpowers: the AI subscriptions you already pay for, as powers for every agent.
+#
+# Usage:
+#   subpowers image "<prompt>" out.png [--painter chatgpt|antigravity] [--size WxH] [--ref IMG]...
+#   subpowers doctor [--fix] [--smoke]     is this machine ready? what to fix?
+#   subpowers powers                       which subscriptions are connected right now
+#   subpowers update                       pull the latest subpowers (git installs)
+#
+# Painters (each runs on YOUR login, never an API key):
+#   chatgpt      OpenAI's current image model through the codex CLI (ChatGPT plan). 60-100 s.
+#   antigravity  Google's Nano Banana 2 through the Antigravity CLI (Google AI plan). ~20 s.
+# --painter auto (the default) uses ChatGPT when codex is logged in, else Antigravity.
+# SUBPOWERS_PAINTER=antigravity changes the default.
+set -euo pipefail
+
+src="${BASH_SOURCE[0]}"
+while [[ -L "$src" ]]; do
+  d="$(cd "$(dirname "$src")" && pwd)"; src="$(readlink "$src")"
+  [[ "$src" != /* ]] && src="$d/$src"
+done
+here="$(cd "$(dirname "$src")" && pwd)"
+
+usage() { sed -n '2,14p' "$here/subpowers" | sed 's/^# \{0,1\}//' >&2; exit "${1:-2}"; }
+
+has_chatgpt() { command -v codex >/dev/null 2>&1 && codex login status 2>&1 | grep -qi chatgpt; }
+has_antigravity() { command -v agy >/dev/null 2>&1 || [[ -x "$HOME/.local/bin/agy" ]]; }
+
+cmd="${1:-help}"; [[ $# -gt 0 ]] && shift
+case "$cmd" in
+  image|draw)
+    painter="${SUBPOWERS_PAINTER:-auto}"; args=()
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --painter) [[ $# -ge 2 ]] || usage; painter="$2"; shift 2 ;;
+        *) args+=("$1"); shift ;;
+      esac
+    done
+    case "$painter" in
+      openai|gpt) painter=chatgpt ;;
+      google|gemini|nano-banana|nanobanana) painter=antigravity ;;
+    esac
+    if [[ "$painter" == auto ]]; then
+      if has_chatgpt; then painter=chatgpt
+      elif has_antigravity; then painter=antigravity
+      else
+        echo "subpowers: no painter is connected. Run: subpowers doctor" >&2; exit 3
+      fi
+    fi
+    case "$painter" in
+      chatgpt|antigravity) exec bash "$here/${painter}-image" ${args[@]+"${args[@]}"} ;;
+      *) echo "subpowers: unknown painter '$painter' (chatgpt or antigravity)" >&2; exit 2 ;;
+    esac
+    ;;
+  doctor) exec bash "$here/doctor" "$@" ;;
+  powers)
+    if has_chatgpt; then echo "image  chatgpt      ON   (codex logged in with ChatGPT)"
+    else echo "image  chatgpt      OFF  (npm install -g @openai/codex, then codex login)"; fi
+    if has_antigravity; then echo "image  antigravity  ON   (agy installed; doctor confirms the login)"
+    else echo "image  antigravity  OFF  (curl -fsSL https://antigravity.google/cli/install.sh | bash, then run agy once)"; fi
+    ;;
+  update)
+    root="$(cd "$here/.." && pwd)"
+    if [[ -d "$root/.git" ]]; then git -C "$root" pull --ff-only && bash "$root/install.sh" --no-doctor
+    else echo "subpowers: not a git install; re-run the installer from a fresh download" >&2; exit 1; fi
+    ;;
+  help|-h|--help) usage 0 ;;
+  *) echo "subpowers: unknown command '$cmd'" >&2; usage ;;
+esac

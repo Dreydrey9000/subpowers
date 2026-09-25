@@ -1,0 +1,76 @@
+#!/usr/bin/env python3
+"""Print the codex driver chain for the subpowers ChatGPT painter, newest model first.
+
+Two models touch every image:
+  PAINTER  OpenAI's image model. Codex's image tool has no model argument, so
+           OpenAI picks it server-side and it is always their current one.
+  DRIVER   the text model that decides to call the image tool (`codex -m`).
+
+This script picks the DRIVER. The source of truth is codex's own per-account
+model list, $CODEX_HOME/models_cache.json, which codex refreshes from OpenAI on
+every run. A new model shows up here without anyone editing this file, and a
+teammate's account gets the models THEIR plan exposes.
+
+Rules: listed models only, lowest `priority` first (OpenAI's own ranking puts
+the newest frontier model at 1), skip models scheduled for retirement
+(`upgrade` set), skip specialty models, skip models that need a newer codex
+than the one installed (bin/doctor tells you to update). `default` goes last:
+codex's own default model, the safety net when the cache is missing.
+
+Usage:
+  resolve-drivers            -> gpt-6-astra:gpt-6-sol:...:default
+  resolve-drivers --explain  -> one line per model on stderr, chain on stdout
+"""
+import json
+import os
+import re
+import subprocess
+import sys
+
+
+def vtuple(s):
+    return tuple(int(x) for x in re.findall(r"\d+", s or "")[:3])
+
+
+def main():
+    explain = "--explain" in sys.argv[1:]
+    home = os.environ.get("CODEX_HOME") or os.path.expanduser("~/.codex")
+    cache = os.path.join(home, "models_cache.json")
+    try:
+        with open(cache) as f:
+            models = json.load(f).get("models", [])
+    except (OSError, ValueError):
+        models = []
+        if explain:
+            print(f"  no model cache at {cache}; run any codex command once", file=sys.stderr)
+
+    try:
+        out = subprocess.run(["codex", "--version"], capture_output=True, text=True, timeout=15).stdout
+        client = vtuple(out)
+    except (OSError, subprocess.SubprocessError):
+        client = ()
+
+    chain = []
+    for m in sorted(models, key=lambda m: m.get("priority", 999)):
+        slug = m.get("slug", "?")
+        need = m.get("minimal_client_version")
+        if m.get("visibility") != "list":
+            why = "skip: hidden"
+        elif m.get("upgrade"):
+            why = f"skip: retiring, replaced by {m['upgrade'].get('model', '?')}"
+        elif m.get("model_specialty"):
+            why = f"skip: specialty ({m['model_specialty']})"
+        elif need and client and vtuple(need) > client:
+            why = f"skip: needs codex >= {need} (run: codex update)"
+        else:
+            why = "use"
+            chain.append(slug)
+        if explain:
+            print(f"  {m.get('priority', '?'):>3}  {slug:<22} {why}", file=sys.stderr)
+
+    chain.append("default")
+    print(":".join(dict.fromkeys(chain)))
+
+
+if __name__ == "__main__":
+    main()

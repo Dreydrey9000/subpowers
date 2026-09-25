@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+# update-codex: keep the codex CLI current. New OpenAI models and image-tool
+# changes ship in the CLI, and resolve-drivers skips any model whose
+# minimal_client_version is newer than the installed codex, so an old CLI
+# quietly means an old driver.
+#
+# Usage: update-codex [--apply] [--daily]
+#   (no flags)  report only: "codex 0.155.1 -> 0.157.0 available" or "... is current"
+#   --apply     run `codex update` when behind
+#   --daily     skip if a check succeeded in the last 24 hours (the image door uses this)
+# Exit: 0 current or updated, 1 behind and not updated, 2 could not check.
+set -uo pipefail
+
+apply=""; daily=""
+for a in "$@"; do
+  case "$a" in
+    --apply) apply=1 ;;
+    --daily) daily=1 ;;
+    *) echo "usage: update-codex [--apply] [--daily]" >&2; exit 2 ;;
+  esac
+done
+
+stamp="${XDG_CACHE_HOME:-$HOME/.cache}/subpowers/codex-update-check"
+if [[ -n "$daily" && -f "$stamp" && -z "$(find "$stamp" -mmin +1440 2>/dev/null)" ]]; then
+  exit 0
+fi
+
+ver() { codex --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n 1; }
+have="$(ver)"
+if [[ -z "$have" ]]; then echo "update-codex: codex not found" >&2; exit 2; fi
+
+latest="$(curl -fsS --max-time 8 https://registry.npmjs.org/@openai/codex/latest 2>/dev/null \
+  | python3 -c 'import json,sys; print(json.load(sys.stdin)["version"])' 2>/dev/null || true)"
+if [[ -z "$latest" ]]; then
+  echo "update-codex: could not reach the npm registry; codex $have unchecked" >&2; exit 2
+fi
+mkdir -p "$(dirname "$stamp")" && touch "$stamp"
+
+behind="$(python3 - "$have" "$latest" <<'PY'
+import re, sys
+v = lambda s: tuple(int(x) for x in re.findall(r"\d+", s)[:3])
+print(1 if v(sys.argv[1]) < v(sys.argv[2]) else 0)
+PY
+)"
+if [[ "$behind" == 0 ]]; then echo "codex $have is current"; exit 0; fi
+if [[ -z "$apply" ]]; then echo "codex $have -> $latest available (run: codex update)"; exit 1; fi
+
+echo "update-codex: updating codex $have -> $latest ..." >&2
+if codex update </dev/null >&2; then
+  echo "codex updated $have -> $(ver)"; exit 0
+fi
+echo "update-codex: 'codex update' failed; staying on $have" >&2
+exit 1
