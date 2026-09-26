@@ -31,7 +31,11 @@ ORDER="chatgpt antigravity grok"
 usage() { sed -n '2,21p' "$here/subpowers" | sed 's/^# \{0,1\}//' >&2; exit "${1:-2}"; }
 say() { echo "subpowers: $*" >&2; }
 
-has_chatgpt() { command -v codex >/dev/null 2>&1 && codex login status 2>&1 | grep -qi chatgpt; }
+has_chatgpt() {
+  local o; command -v codex >/dev/null 2>&1 || return 1
+  o="$(codex login status 2>&1)" || true
+  grep -qi chatgpt <<<"$o"
+}
 # A plan counts as ON only when its CLI answers as logged in (installed is not enough:
 # a cancelled plan's CLI is still installed). Answers are cached for 10 minutes in
 # ~/.cache/subpowers so a fan-out checks once; a painter that reports the plan

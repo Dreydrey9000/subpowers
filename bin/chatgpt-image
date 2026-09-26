@@ -88,7 +88,10 @@ done
 
 command -v codex >/dev/null 2>&1 || {
   echo "chatgpt-image: codex CLI not found. npm install -g @openai/codex (or brew install codex), then codex login" >&2; exit 127; }
-if ! codex login status 2>&1 | grep -qi "chatgpt"; then
+# Output is captured before grep: under pipefail, `cli | grep -q` fails when grep exits
+# early and the CLI dies of SIGPIPE, which reads a logged-in plan as logged out.
+login_out="$(codex login status 2>&1)" || true
+if ! grep -qi "chatgpt" <<<"$login_out"; then
   echo "chatgpt-image: codex is not logged in with ChatGPT (run: codex login). Refusing to fall back to an API key." >&2
   exit 3
 fi
@@ -180,7 +183,8 @@ iso=(); cenv=(env -u OPENAI_API_KEY -u OPENAI_BASE_URL -u CODEX_API_KEY)
 if [[ -z "${SUBPOWERS_CODEX_KEEP_CONFIG:-}" ]]; then
   iso=(-c 'model_provider="openai"' -c 'openai_base_url="https://chatgpt.com/backend-api/codex"' -c 'mcp_servers={}'
        -c 'project_doc_max_bytes=0' -c 'features.shell_tool=false')
-  codex exec --help 2>/dev/null | grep -q -- '--ignore-user-config' && iso+=(--ignore-user-config)
+  exec_help="$(codex exec --help 2>/dev/null)" || true
+  grep -q -- '--ignore-user-config' <<<"$exec_help" && iso+=(--ignore-user-config)
 else
   cenv=()
 fi

@@ -52,7 +52,9 @@ else
     1) warn "$msg  (subpowers doctor --fix runs it; the painter also does it once a day)" ;;
     *) warn "$msg" ;;
   esac
-  if codex login status 2>&1 | grep -qi "chatgpt"; then
+  # Captured before grep: under pipefail a CLI killed by SIGPIPE reads as a failed check.
+  login_out="$(codex login status 2>&1)"
+  if grep -qi "chatgpt" <<<"$login_out"; then
     pass "login stored: ChatGPT (your plan pays; no API key)"
     # A stored login is not a working login: ask OpenAI one tiny question, the
     # same way the painter does, and only PASS on a real answer.
@@ -81,7 +83,8 @@ print((msg or "no answer before the timeout").split(", url:")[0][:160])' 2>/dev/
   else
     fail "not logged in with ChatGPT -> codex login   (choose Sign in with ChatGPT)"; cg_ok=""
   fi
-  if codex features list 2>/dev/null | awk '$1=="image_generation"{print $NF}' | grep -q true; then pass "image_generation feature is on"
+  feats="$(codex features list 2>/dev/null)"
+  if awk '$1=="image_generation" && $NF=="true"{on=1} END{exit !on}' <<<"$feats"; then pass "image_generation feature is on"
   else fail "image_generation feature is off -> codex features enable image_generation"; cg_ok=""; fi
   chain="$(python3 "$here/resolve-drivers" 2>/dev/null)"
   if [[ "$chain" == "default" ]]; then warn "no codex model list yet (it appears after the first codex run); using codex's default"
