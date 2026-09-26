@@ -28,7 +28,8 @@ here="$(cd "$(dirname "$src")" && pwd)"
 HOME_DIR="${SUBPOWERS_HOME:-$HOME/.subpowers}"
 ORDER="chatgpt antigravity grok"
 
-usage() { sed -n '2,21p' "$here/subpowers" | sed 's/^# \{0,1\}//' >&2; exit "${1:-2}"; }
+# The help is the header comment, read up to its first non-comment line so it cannot drift.
+usage() { awk 'NR == 1 { next } !/^#/ { exit } { sub(/^# ?/, ""); print }' "$here/subpowers" >&2; exit "${1:-2}"; }
 say() { echo "subpowers: $*" >&2; }
 
 has_chatgpt() {
