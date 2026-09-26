@@ -12,7 +12,7 @@ If `subpowers` is not on PATH, run `bash ~/.claude/skills/subpowers/bin/subpower
 ## Commands
 
 ```bash
-subpowers image "<prompt>" /abs/out.png [--painter chatgpt|antigravity|grok|all] [--size WxH] [--ref photo.jpg]... [--refs NAME]
+subpowers image "<prompt>" /abs/out.png [--painter chatgpt|antigravity|grok|council] [--size WxH] [--ref photo.jpg]... [--refs NAME]
 subpowers refs add NAME photo1.jpg photo2.heic ...     # save a reference set once (a person, a product, a world)
 subpowers sheet NAME /abs/sheet.png [--painter all]     # character sheet: front, profiles, 3/4, back, face close-up
 subpowers storyboard shots.txt /abs/outdir [--refs NAME] [--painter P] [--style "..."]   # one frame per line + a board
@@ -22,7 +22,7 @@ subpowers doctor      # live-checks every painter and names the exact fix
 
 - stdout is the saved path (for `all`: one path per painter, then the side-by-side sheet). Beside each image: `out.prompt.txt` (prompt, the prompt the model received, model, C2PA signer, timings) and `out.original.*` when resized or converted.
 - Look at every image before you show, describe or build on it. Then open it or send it to the user.
-- **Offer choices when it matters:** one version (auto), three versions (`--painter all`, one per subscription), or different angles (a `sheet`, or several prompts).
+- **Offer choices when it matters:** one version (auto), a council (`--painter council`, same as `all`: every subscription paints it and the user picks the best), or different angles (a `sheet`, or several prompts).
 
 ## Pick the painter
 

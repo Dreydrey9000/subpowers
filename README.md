@@ -48,6 +48,22 @@ Then ask any agent for an image. Or type it:
 subpowers image "isometric 3D render of a tiny coffee shop on a floating island, no text" ~/Desktop/shop.png
 ```
 
+## Council mode: every subscription paints it, you pick the best
+
+<p align="center"><img src="assets/council-gta.jpg" alt="One prompt painted by three subscriptions side by side: ChatGPT, Antigravity and Grok versions of the founders on a Tesla at a Los Angeles overlook" width="100%"></p>
+
+```bash
+subpowers image "the three founders on a Tesla hood at a Los Angeles overlook, GTA loading-screen style" out.png --painter council
+```
+
+One prompt, three painters in parallel, one side-by-side sheet. Above: ChatGPT won this round, Antigravity was close, and Grok handed Elon a ChatGPT phone. You pay nothing extra for the second and third opinions: they come out of plans you already have.
+
+## Same cast, every scene
+
+<p align="center"><img src="assets/cast-slider.webp" alt="The same three friends in six scenes: selfies in a Tesla, a podcast, a loft shoot, the Venice boardwalk, a rooftop at night, a cafe" width="85%"></p>
+
+Paint a cast once, then pass that image back with `--ref` and write "the same people as in the reference". These six scenes are one cast (all AI-generated people), painted on a ChatGPT plan.
+
 ## What it made (real outputs, real commands)
 
 Every image below was made by subpowers on a normal subscription, and every caption comes from the receipt saved next to it.
@@ -138,24 +154,24 @@ GROK_IMAGE_MODEL=                   # empty = xAI's default Imagine model instea
 ## Beyond one image
 
 ```bash
-subpowers image "..." out.png --painter all          # every connected subscription at once + a side-by-side sheet
+subpowers image "..." out.png --painter council      # every connected subscription at once + a side-by-side sheet
 subpowers refs add me selfie.heic event.jpg          # save who you are once (or a product, or a world)
 subpowers image "me on a rooftop at golden hour" out.png --refs me
-subpowers sheet me sheet.png --painter all           # character sheet: front, profiles, 3/4, back, face close-up
+subpowers sheet me sheet.png --painter council       # character sheet: front, profiles, 3/4, back, face close-up
 subpowers storyboard shots.txt board/ --refs me --style "35mm, deep blue palette"
 ```
 
-- **Three versions or one?** `--painter all` gives you one take per subscription in a single sheet, so you pick the winner.
+- **Three versions or one?** `--painter council` (same as `all`) gives you one take per subscription in a single sheet, so you pick the winner.
 - **Reference sets** keep the same person (or product) consistent across every image, sheet and storyboard frame.
 - **Storyboards:** write one shot per line (framing, action, setting). Frames paint in parallel and land in `storyboard.jpg` in order, with the same person in every shot.
 - **Cancel a plan, nothing breaks.** A paused subscription just shows OFF in `subpowers powers`, and `auto` moves to the next painter when one fails or runs out of quota.
 - **One rule for real people:** never pass a photo of someone *else* as a setting reference. The painters borrow faces from every reference. Describe the set in words instead.
-- **Same cast, new scene:** pass an earlier image with `--ref` and say "the same people as in the reference". That is how the hero above stays consistent from the Tesla to the podcast.
+- **Same cast, new scene:** pass an earlier image with `--ref` and say "the same people as in the reference". That is how the hero and the cast above stay consistent from scene to scene.
 
 ```bash
 subpowers library find podcast                        # every image you have made, newest first, with its tags
 subpowers library find --painter grok --tag project=launch
-subpowers slideshow slider.webp a.png b.png c.png     # one looping crossfade of your picks (plays in any README)
+subpowers slideshow slider.webp a.png b.png c.png     # one looping slider of your picks (plays in any README)
 ```
 
 - **Every image is indexed.** subpowers adds a line to `~/.subpowers/library.jsonl` for each image: where it is, the painter, the image model, the helper model and effort, the prompt, references, sizes and the C2PA signer, plus your own tags (`SUBPOWERS_TAGS=project=launch,cast=trio`). Nothing is copied. Want backups? Drop an executable script at `~/.subpowers/hooks/after-image` (it gets the image, its receipt and its id) and send them to B2, S3 or Drive.

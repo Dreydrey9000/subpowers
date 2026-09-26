@@ -2,7 +2,7 @@
 # subpowers: the AI subscriptions you already pay for, as powers for every agent.
 #
 # Usage:
-#   subpowers image "<prompt>" out.png [--painter P|all] [--size WxH] [--ref IMG]... [--refs NAME]
+#   subpowers image "<prompt>" out.png [--painter P|council] [--size WxH] [--ref IMG]... [--refs NAME]
 #   subpowers sheet NAME out.png [--painter P|all]      character sheet (front, sides, 3/4, close-up)
 #   subpowers storyboard shots.txt OUTDIR [--refs NAME] [--painter P] [--size WxH] [--style "..."]
 #   subpowers refs add NAME IMG...  |  refs list [NAME]  |  refs path NAME
@@ -15,7 +15,8 @@
 #   antigravity  Google's Nano Banana 2 through the Antigravity CLI (Google AI plan). ~20-40 s.
 #   grok         xAI's Grok Imagine through the Grok CLI (SuperGrok plan). ~35-45 s.
 # --painter auto (default): the first connected painter; if it fails (paused plan, quota), the next.
-# --painter all: every connected painter in parallel, plus a side-by-side sheet. SUBPOWERS_PAINTER sets the default.
+# --painter council (or all): every connected painter paints the same prompt in parallel, plus a side-by-side
+#   sheet, so you pick the best one. SUBPOWERS_PAINTER sets the default.
 set -euo pipefail
 
 src="${BASH_SOURCE[0]}"
@@ -27,7 +28,7 @@ here="$(cd "$(dirname "$src")" && pwd)"
 HOME_DIR="${SUBPOWERS_HOME:-$HOME/.subpowers}"
 ORDER="chatgpt antigravity grok"
 
-usage() { sed -n '2,20p' "$here/subpowers" | sed 's/^# \{0,1\}//' >&2; exit "${1:-2}"; }
+usage() { sed -n '2,21p' "$here/subpowers" | sed 's/^# \{0,1\}//' >&2; exit "${1:-2}"; }
 say() { echo "subpowers: $*" >&2; }
 
 has_chatgpt() { command -v codex >/dev/null 2>&1 && codex login status 2>&1 | grep -qi chatgpt; }
@@ -66,6 +67,7 @@ norm_painter() {
     openai|gpt) echo chatgpt ;;
     google|gemini|nano-banana|nanobanana) echo antigravity ;;
     xai|imagine|grok-imagine|supergrok) echo grok ;;
+    council|everyone|every) echo all ;;   # council: every subscription paints it, you pick the best
     *) echo "$1" ;;
   esac
 }
