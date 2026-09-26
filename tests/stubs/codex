@@ -1,0 +1,91 @@
+#!/usr/bin/env python3
+"""Stand-in for the codex CLI: login, model/features listing, exec --json with a real PNG and a session rollout."""
+import json
+import os
+import re
+import sys
+import uuid
+
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+import _stub  # noqa: E402
+import fakeimg  # noqa: E402
+
+a = sys.argv[1:]
+_stub.log("codex")
+home = os.environ.get("CODEX_HOME") or os.path.expanduser("~/.codex")
+
+if a[:1] == ["--version"]:
+    print("codex-cli " + os.environ.get("STUB_CODEX_VERSION", "0.157.0"))
+elif a[:2] == ["login", "status"]:
+    if os.environ.get("STUB_CODEX_LOGGED_OUT"):
+        print("Not logged in", file=sys.stderr)
+        sys.exit(1)
+    print("Logged in using ChatGPT")
+    _stub.chatty()
+elif a[:2] == ["features", "list"]:
+    print("image_generation                  stable             true")
+elif a[:1] == ["update"]:
+    print("codex updated")
+elif a[:1] == ["exec"] and "--help" in a:
+    print("Usage: codex exec [OPTIONS] [PROMPT]\n  --ignore-user-config  Do not load $CODEX_HOME/config.toml")
+    _stub.chatty()
+elif a[:1] == ["exec"]:
+    rest = a[1:]
+    prompt = ""
+    i = 0
+    while i < len(rest):
+        v = rest[i]
+        if v in ("-c", "-m", "-C", "-s", "--model", "--cd", "--sandbox"):
+            i += 2
+            continue
+        if v == "-i":
+            break
+        if v.startswith("-"):
+            i += 1
+            continue
+        prompt = v
+        break
+    tid = str(uuid.uuid4())
+    print(json.dumps({"type": "thread.started", "thread_id": tid}))
+    print(json.dumps({"type": "turn.started"}))
+    if "Reply with exactly: pong" in prompt:
+        err = os.environ.get("STUB_CODEX_LIVE_ERROR")
+        if err:
+            print(json.dumps({"type": "error", "message": err}))
+            print(json.dumps({"type": "turn.failed", "error": {"message": err}}))
+            sys.exit(1)
+        print(json.dumps({"type": "item.completed", "item": {"type": "agent_message", "text": "pong"}}))
+        print(json.dumps({"type": "turn.completed", "usage": {"input_tokens": 900, "output_tokens": 3}}))
+        sys.exit(0)
+    m = re.search(r"SIZE: (\d+)x(\d+)", prompt)
+    w, h = (int(m.group(1)), int(m.group(2))) if m else (1254, 1254)
+    if w == h:
+        w = h = 1254  # the real painter ignores exact pixels: square asks come back 1254x1254
+    img_dir = os.path.join(home, "generated_images", tid)
+    os.makedirs(img_dir, exist_ok=True)
+    saved = os.path.join(img_dir, "ig_1.png")
+    fakeimg.png(saved, w, h)
+    _stub.painted("codex", saved)
+    tin = int(os.environ.get("STUB_CODEX_INPUT_TOKENS", "25000"))
+    usage = {"input_tokens": tin, "cached_input_tokens": 0, "output_tokens": 120, "reasoning_output_tokens": 40,
+             "total_tokens": tin + 120}
+    sess = os.path.join(home, "sessions", "2026", "09", "26")
+    os.makedirs(sess, exist_ok=True)
+    events = [
+        {"type": "session_meta", "payload": {"id": tid, "cwd": _stub.arg("-C")}},
+        {"type": "event_msg", "payload": {"type": "token_count", "info": {
+            "total_token_usage": dict(usage, input_tokens=tin // 2, output_tokens=60), "last_token_usage": usage}}},
+        {"type": "event_msg", "payload": {"type": "item_completed", "thread_id": tid, "item": {
+            "type": "Extension", "kind": "image_gen.generation", "status": "completed",
+            "revisedPrompt": "stub revised prompt", "transparentBackground": False, "savedPath": saved}}},
+        {"type": "event_msg", "payload": {"type": "token_count", "info": {
+            "total_token_usage": usage, "last_token_usage": usage}}},
+    ]
+    with open(os.path.join(sess, f"rollout-2026-09-26T00-00-00-{tid}.jsonl"), "w") as f:
+        for e in events:
+            f.write(json.dumps(e) + "\n")
+    print(json.dumps({"type": "item.completed", "item": {"type": "agent_message", "text": "done"}}))
+    print(json.dumps({"type": "turn.completed", "usage": {"input_tokens": tin, "output_tokens": 120}}))
+else:
+    print("codex stub: unhandled " + " ".join(a), file=sys.stderr)
+    sys.exit(2)

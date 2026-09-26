@@ -1,0 +1,55 @@
+#!/usr/bin/env python3
+"""Stand-in for the Grok CLI: login listing and --output-format streaming-json with image_gen / image_edit."""
+import json
+import os
+import re
+import sys
+import time
+import uuid
+
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+import _stub  # noqa: E402
+import fakeimg  # noqa: E402
+
+a = sys.argv[1:]
+_stub.log("grok", model_override=os.environ.get("GROK_IMAGE_GEN_MODEL_OVERRIDE"))
+
+if a[:1] == ["--version"]:
+    print("grok 1.0.41 (stub)")
+elif a[:1] == ["models"]:
+    if os.environ.get("STUB_GROK_LOGGED_OUT"):
+        print("Not logged in. Run: grok login")
+        sys.exit(1)
+    print("You are logged in with grok.com.\n\nDefault model: grok-4.7-build-fast\n\nAvailable models:")
+    print("  - grok-4.7\n  * grok-4.7-build-fast (default)\n  - grok-4.6")
+    _stub.chatty()
+elif "--prompt-file" in a:
+    hang = os.environ.get("STUB_GROK_HANG")
+    if hang:
+        time.sleep(float(hang))  # never answers: the painter's own timeout must end the call
+        sys.exit(1)
+    task = open(_stub.arg("--prompt-file")).read()
+    tool = _stub.arg("--tools")
+    prompt = re.search(r"<<<PROMPT\n(.*)\nPROMPT>>>", task, re.S).group(1)
+    aspect = re.search(r'aspect_ratio = "([^"]+)"', task).group(1)
+    m = re.search(r"image = \[(.*?)\];", task)
+    images = re.findall(r'"([^"]+)"', m.group(1)) if m else []
+    _stub.log("grok-paint", tool=tool, aspect=aspect, images=len(images))
+    sid = str(uuid.uuid4())
+    img_dir = os.path.join(os.path.expanduser("~/.grok/sessions/stub"), sid, "images")
+    os.makedirs(img_dir, exist_ok=True)
+    w, h = _stub.DIMS[aspect]
+    saved = os.path.join(img_dir, "1.jpg")
+    fakeimg.jpeg(saved, w, h, b"c2pa xAI Grok Imagine SpaceXAI trainedAlgorithmicMedia")
+    _stub.painted("grok", saved)
+    raw = {"prompt": prompt, "aspect_ratio": aspect}
+    if images:
+        raw["image"] = images
+    for e in ({"type": "tool_call", "toolName": tool, "toolCallId": "call-1", "rawInput": raw},
+              {"type": "tool_call_update", "toolCallId": "call-1", "status": "completed", "rawOutput": {"path": saved}},
+              {"type": "text", "data": saved},
+              {"type": "end", "sessionId": sid}):
+        print(json.dumps(e), flush=True)
+else:
+    print("grok stub: unhandled " + " ".join(a), file=sys.stderr)
+    sys.exit(2)
