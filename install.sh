@@ -52,6 +52,9 @@ else
   echo "  running from $target (git checkout: $([[ -d "$target/.git" ]] && echo yes || echo no))"
 fi
 chmod +x "$target"/bin/* "$target"/install.sh 2>/dev/null || true
+# In a git checkout, ignore permission bits so this chmod never reads as a local edit
+# (it made `subpowers update` stop with "commit your changes", 2026-09-26).
+[[ -d "$target/.git" ]] && git -C "$target" config core.fileMode false 2>/dev/null || true
 
 # 2. other agents' skill folders
 link_into() {  # link_into <skills-dir>

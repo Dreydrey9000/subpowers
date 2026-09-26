@@ -192,7 +192,7 @@ To make any image, run:
 - Full instructions: ~/.claude/skills/subpowers/SKILL.md
 ```
 
-Update anytime with `subpowers update`. Uninstall: delete `~/.claude/skills/subpowers` plus the links in `~/.agents/skills`, `~/.codex/skills` and `~/.local/bin`.
+Update anytime with `subpowers update`. If a copy installed before v0.3.1 stops with "commit your changes", run `git -C ~/.claude/skills/subpowers -c core.fileMode=false pull --ff-only` once (the old installer's `chmod` looked like an edit). Uninstall: delete `~/.claude/skills/subpowers` plus the links in `~/.agents/skills`, `~/.codex/skills` and `~/.local/bin`.
 
 ## For AI agents: how to install this for your user
 

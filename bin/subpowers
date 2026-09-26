@@ -255,7 +255,8 @@ Photorealistic, evenly spaced, no text, no labels, no watermark."
     ;;
   update)
     root="$(cd "$here/.." && pwd)"
-    if [[ -d "$root/.git" ]]; then git -C "$root" pull --ff-only && bash "$root/install.sh" --no-doctor
+    # core.fileMode=false: the installer's chmod is not a local edit; real edits still stop the pull.
+    if [[ -d "$root/.git" ]]; then git -C "$root" -c core.fileMode=false pull --ff-only && bash "$root/install.sh" --no-doctor
     else say "not a git install; re-run the installer from a fresh download"; exit 1; fi
     ;;
   help|-h|--help) usage 0 ;;
