@@ -1,7 +1,8 @@
 <h1 align="center">subpowers</h1>
 
 <p align="center"><b>Your coding agent makes images on the ChatGPT, Google and Grok plans you already pay for.</b><br>
-No API key. No per-image bill. One prompt, three plans, you pick.</p>
+No API key. No per-image bill. One prompt, three plans, you pick.<br>
+<sub>Needs a paid ChatGPT, Google AI or SuperGrok plan. Built and tested on a Mac.</sub></p>
 
 <p align="center"><picture>
   <source media="(prefers-reduced-motion: reduce)" srcset="assets/hero-still.jpg">
@@ -83,7 +84,7 @@ Every caption comes from the receipt saved next to the image.
 
 ## Every image comes with a receipt
 
-AI images are about to get questioned everywhere. subpowers saves a plain-text receipt next to each one: your prompt, the prompt the model actually received, which painter and helper model ran, the content credential (C2PA) the provider embedded in the image, sizes and timings. A real one, from the first scene in "Same cast, every scene" (folder paths trimmed):
+Every image gets a receipt: a plain-text file saved next to it that says who made it and how. It holds your prompt, the prompt the model actually received, which painter and helper model ran, the content credential (C2PA) the provider embedded in the image, sizes and timings. A real one, from the first scene in "Same cast, every scene" (folder paths trimmed):
 
 ```text
 PROMPT (as given):
@@ -102,7 +103,7 @@ provenance:
   image_gen saved_path: ~/.codex/generated_images/01a0db4a-.../exec-77922a9d-....png
 ```
 
-The receipt also says when an image was cropped or upscaled locally, so nothing gets passed off as something it isn't.
+The receipt also says when an image was cropped or upscaled on your machine.
 
 ## It tells you exactly what's wrong
 
@@ -205,7 +206,7 @@ To make any image, run:
 
 </details>
 
-Update anytime with `subpowers update`. If a copy installed before v0.3.1 stops with "commit your changes", run `git -C ~/.claude/skills/subpowers -c core.fileMode=false pull --ff-only` once (the old installer's `chmod` looked like an edit). Uninstall: delete `~/.claude/skills/subpowers` plus the links in `~/.agents/skills`, `~/.codex/skills` and `~/.local/bin`.
+Update anytime with `subpowers update` (check what you have with `subpowers --version`). If a copy installed before v0.3.1 stops with "commit your changes", run `git -C ~/.claude/skills/subpowers -c core.fileMode=false pull --ff-only` once (the old installer's `chmod` looked like an edit). Uninstall: delete `~/.claude/skills/subpowers` plus the links in `~/.agents/skills`, `~/.codex/skills` and `~/.local/bin`.
 
 ## For AI agents: how to install this for your user
 
@@ -226,10 +227,10 @@ Never ask the user for an API key, and never put one in. subpowers only uses the
 
 ## What's next: build it with us
 
-This is the first power. The [roadmap](ROADMAP.md) starts with a **Studio**: save reference sets of *you*, your products and your world once, and every agent can put them in any scene on command. After that, more powers from the subscriptions you already have.
+This is the first power. Next up is video, then a **Studio** page to browse every image with its receipt and re-run a winner in one click. See the [roadmap](ROADMAP.md).
 
 Want to build a piece of it? Read [CONTRIBUTING.md](CONTRIBUTING.md), open an issue, send a pull request, or say hi in [Discussions](https://github.com/itsluisc/subpowers/discussions). Every good idea that ships gets credited.
 
 ## Credits
 
-The ChatGPT painter started as [oakplank/gpt-image-bridge](https://github.com/oakplank/gpt-image-bridge) (MIT) and was rebuilt from there: newest-model resolver, receipts, reference photos, doctor, installer, and two more painters. Built by [Luis Carrillo](https://github.com/itsluisc) with his agent team. MIT licensed.
+The ChatGPT painter started as [oakplank/gpt-image-bridge](https://github.com/oakplank/gpt-image-bridge) (MIT) and was rebuilt from there: newest-model resolver, receipts, reference photos, doctor, installer, and two more painters. Built by [Luis Carrillo](https://github.com/itsluisc) with his agent team. MIT licensed. How the pieces fit: [architecture diagram](docs/diagrams/architecture.md). What changed: [CHANGELOG](CHANGELOG.md).
