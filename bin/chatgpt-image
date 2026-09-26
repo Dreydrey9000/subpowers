@@ -26,7 +26,7 @@
 #   untouched file that carries OpenAI's C2PA signature.
 #
 # Usage:
-#   chatgpt-image "<prompt>" <out.png> [--size WxH] [--ref IMG]... [--driver MODEL]
+#   chatgpt-image "<prompt>" <out.png|out.jpg> [--size WxH] [--ref IMG]... [--driver MODEL]
 #
 #   --ref     a reference image the painter must see (a person's own photos to
 #             keep their face, a product shot, a style frame). Repeatable.
@@ -63,7 +63,7 @@ done
 here="$(cd "$(dirname "$src")" && pwd)"
 me="chatgpt-image"
 
-usage() { echo 'usage: chatgpt-image "<prompt>" <out.png> [--size WxH] [--ref IMG]... [--driver MODEL]' >&2; exit 2; }
+usage() { echo 'usage: chatgpt-image "<prompt>" <out.png|out.jpg> [--size WxH] [--ref IMG]... [--driver MODEL]' >&2; exit 2; }
 [[ $# -lt 2 ]] && usage
 
 prompt="$1"; out="$2"; shift 2
@@ -296,20 +296,21 @@ fi
 
 dims_of() { python3 "$here/imgops" dims "$1" 2>/dev/null || true; }
 
-cp "$img" "$out"
-raw_dims="$(dims_of "$out")"
-resized=""
+work="$workdir/deliver.png"
+cp "$img" "$work"
+raw_dims="$(dims_of "$work")"
+original=""; resized=""; delivered_as=""
 # The painter ignores exact pixel requests (square asks come back 1254x1254).
 # If --size was given and the aspect matches, keep the signed original beside
-# the file and resize the deliverable locally (free, lossless PNG).
+# the file and resize the deliverable locally.
 if [[ -n "$size" && -n "$raw_dims" && "$raw_dims" != "$size" ]]; then
   rw="${raw_dims%x*}"; rh="${raw_dims#*x}"; sw="${size%x*}"; sh="${size#*x}"
   # Aspect counts as "the same" within 1% (the painter returns e.g. 1122x1402 for a 4:5 ask).
   dd=$(( rw * sh - rh * sw )); ok_aspect=""; (( dd * dd * 10000 <= (rh * sw) * (rh * sw) )) && ok_aspect=1
   if [[ -n "$ok_aspect" ]] && python3 "$here/imgops" backend >/dev/null 2>&1; then
-    cp "$out" "${stem}.original.png"
-    python3 "$here/imgops" resize "$out" "$sw" "$sh"
-    resized="resized locally from ${raw_dims}; signed original kept at ${stem}.original.png"
+    original="${stem}.original.png"; cp "$img" "$original"
+    python3 "$here/imgops" resize "$work" "$sw" "$sh"
+    resized="resized locally from ${raw_dims}; signed original kept at ${original}"
   elif [[ -n "$ok_aspect" ]]; then
     resized="NOT resized: painter returned ${raw_dims}; no image ops here (no Pillow, no sips); fix: python3 -m pip install --user pillow"
     echo "chatgpt-image: WARNING ${resized}" >&2
@@ -318,13 +319,29 @@ if [[ -n "$size" && -n "$raw_dims" && "$raw_dims" != "$size" ]]; then
     echo "chatgpt-image: WARNING ${resized}" >&2
   fi
 fi
+
+# The painter always returns PNG. A .jpg ask is converted locally, keeping the signed
+# PNG beside it. With no image ops here the plan has already paid, so the PNG is
+# delivered under its real extension instead.
+out_ext="$(printf '%s' "${out##*.}" | tr '[:upper:]' '[:lower:]')"
+if [[ "$out_ext" != jpg && "$out_ext" != jpeg ]]; then
+  cp "$work" "$out"
+elif python3 "$here/imgops" backend >/dev/null 2>&1; then
+  if [[ -z "$original" ]]; then original="${stem}.original.png"; cp "$img" "$original"; fi
+  python3 "$here/imgops" convert "$work" "$out"
+  delivered_as="converted png -> ${out_ext} locally; signed original kept at ${original}"
+else
+  out="${stem}.png"; cp "$work" "$out"
+  delivered_as="the painter's own png: no image ops here (no Pillow, no sips), so no conversion to ${out_ext}; fix: python3 -m pip install --user pillow"
+  echo "chatgpt-image: WARNING delivered ${delivered_as}" >&2
+fi
 bytes="$(wc -c <"$out" | tr -d ' ')"
 dims="$(dims_of "$out")"
 [[ -z "$dims" ]] && dims="unknown"
 
 # The PNG carries an OpenAI-signed C2PA manifest. Its softwareAgent is the only
 # on-file evidence of the painter; today it says only "ChatGPT / gpt-image".
-c2pa_src="$out"; [[ -f "${stem}.original.png" && -n "$resized" ]] && c2pa_src="${stem}.original.png"
+c2pa_src="${original:-$out}"
 c2pa="$(python3 - "$c2pa_src" <<'PY'
 import sys
 d = open(sys.argv[1], "rb").read()
@@ -360,6 +377,7 @@ painter="OpenAI's current ChatGPT image model, chosen server-side (last confirme
   echo "  requested size: ${size:-model choice}"
   echo "  painter size: ${raw_dims:-unknown}"
   echo "  delivered size: ${dims}${resized:+ (${resized})}"
+  [[ -n "$delivered_as" ]] && echo "  delivered as: ${delivered_as}"
   echo "  codex rollout: ${rollout:-<not found>}"
   echo "  transparent_background reported: ${alpha:-n/a}"
   echo "  image_gen saved_path: ${saved:-<not reported>}"
