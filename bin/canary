@@ -92,6 +92,11 @@ def probe(path, argv, cli):
         return False, "", f"could not run: {e}"
 
 
+def probe_str(argv):
+    """A probe rendered for reports: the temp-dir placeholder reads as <tmpdir>."""
+    return " ".join("<tmpdir>" if isinstance(x, dict) else str(x) for x in argv)
+
+
 def item_holds(item, out, rc0):
     kind = [k for k in ("flag", "string", "istring", "regex", "exit0") if k in item]
     if not kind:
@@ -307,11 +312,11 @@ def main():
             if holds:
                 r["items_ok"] += 1
             else:
-                shown = " ".join(str(x) for x in item["probe"])
+                shown = probe_str(item["probe"])
                 if why_bad:
                     r["missing"].append(why_bad + f" ({item['id']})")
                 elif err:
-                    r["missing"].append(f"`{cli} {' '.join(str(x) for x in item['probe'])}` {err} "
+                    r["missing"].append(f"`{cli} {shown}` {err} "
                                         f"({item['id']}; {item['why']})")
                 else:
                     want = item.get("flag") or item.get("string") or item.get("istring") or item.get("regex")

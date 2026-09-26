@@ -316,6 +316,129 @@ check "apply exits 0" exits 0
 check "apply ran codex update" called '"codex"' '["update"]'
 check "apply stamps" test -e "$stamp"
 
+echo "== canary: the drift radar"
+# The canary talks to launchctl and osascript through PATH; stubs stand in so
+# no test ever touches the real ~/Library or shows a real notification.
+ln -sf "$stubs/launchctl" "$P/launchctl"
+ln -sf "$stubs/osascript" "$P/osascript"
+
+newcase "canary: every contract item present"
+run python3 "$bin/canary"
+check "exit 0" exits 0
+check "codex line OK" has "$C/stdout" "codex +0\\.157\\.0 +11/11 +OK"
+check "agy line OK" has "$C/stdout" "agy +1\\.2\\.11 +9/9 +OK"
+check "grok line OK" has "$C/stdout" "grok +1\\.0\\.41 +13/13 +OK"
+check "no drift" has "$C/stdout" "OK: no drift"
+check "state saved" test -f "$C/home/.subpowers/canary/state.json"
+check "no drift file on a clean run" test -z "$(ls "$C/home/.subpowers/canary"/drift-*.md 2>/dev/null)"
+
+newcase "canary: a grok --help that lost --disallowed-tools is drift"
+run STUB_GROK_HELP_DROP=--disallowed-tools python3 "$bin/canary"
+check "exit 1" exits 1
+check "names the CLI and the exact flag" has "$C/stdout" "DRIFT grok .*--disallowed-tools"
+check "codex and agy still OK" has "$C/stdout" "codex .*OK"
+driftmd="$(ls "$C/home/.subpowers/canary"/drift-*.md 2>/dev/null | head -n 1)"
+check "drift report written" test -s "$driftmd"
+check "report path printed" has "$C/stdout" "drift report written"
+check "report carries a vendor-drift issue body" has "$driftmd" "vendor-drift"
+check "report names the flag" has "$driftmd" "--disallowed-tools"
+check "report says it stays local" has "$driftmd" "never posts"
+
+newcase "canary: a version change between two runs is reported"
+run STUB_GROK_VERSION=1.0.40 python3 "$bin/canary"
+check "first run exit 0" exits 0
+run STUB_GROK_VERSION=1.0.42 python3 "$bin/canary"
+check "second run exit 0 (contract holds)" exits 0
+check "reports old -> new" has "$C/stdout" "1\\.0\\.40 -> 1\\.0\\.42"
+check "still no drift" has "$C/stdout" "OK: no drift.*version change"
+
+newcase "canary: --json is machine-readable"
+run python3 "$bin/canary" --json
+check "exit 0" exits 0
+check "one JSON object, status ok, versions in it" python3 -c '
+import json, sys
+d = json.load(open(sys.argv[1]))
+assert d["status"] == "ok" and d["exit"] == 0 and d["drift_file"] is None
+assert d["clis"]["codex"]["version"] == "0.157.0" and d["clis"]["grok"]["items_ok"] == 13' "$C/stdout"
+
+newcase "canary: --live also runs the doctor"
+run python3 "$bin/canary" --live
+check "exit 0" exits 0
+check "doctor verdict in the report" has "$C/stdout" "doctor: READY"
+
+newcase "canary: --notify on drift calls osascript"
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  run STUB_GROK_HELP_DROP=--prompt-file python3 "$bin/canary" --notify
+  check "exit 1" exits 1
+  check "osascript showed the notification" called '"osascript"' 'display notification'
+else
+  ok "skipped on $(uname -s) (notifications are macOS-only)"
+fi
+
+newcase "canary: --install-launchagent writes and loads the agent"
+plist="$C/home/Library/LaunchAgents/com.subpowers.canary.plist"
+run python3 "$bin/canary" --install-launchagent
+check "exit 0" exits 0
+check "plist written under the (temp) HOME" test -f "$plist"
+check "daily StartCalendarInterval" has "$plist" "StartCalendarInterval"
+check "at 07:15" has "$plist" "<key>Hour</key>"
+check "minute 15" has "$plist" "<integer>15</integer>"
+check "runs --live --notify" has "$plist" "--notify"
+check "logs under SUBPOWERS_HOME" has "$plist" "\.subpowers/canary/launchd\.log"
+check "explicit PATH EnvironmentVariables" has "$plist" "/opt/homebrew/bin"
+check "launchctl bootstrap called" called '"launchctl"' '"bootstrap"'
+run python3 "$bin/canary" --install-launchagent
+check "second install exit 0 (idempotent)" exits 0
+check "reload bootouts the old agent first" called '"launchctl"' '"bootout"'
+
+newcase "doctor: sees the canary LaunchAgent once installed"
+run python3 "$bin/canary" --install-launchagent
+run bash "$bin/doctor"
+check "exit 0" exits 0
+check "INFO says installed" has "$C/stdout" "INFO +canary LaunchAgent installed"
+
+newcase "canary: --uninstall-launchagent reverses it"
+plist="$C/home/Library/LaunchAgents/com.subpowers.canary.plist"
+run python3 "$bin/canary" --install-launchagent
+run python3 "$bin/canary" --uninstall-launchagent
+check "exit 0" exits 0
+check "plist removed" test ! -e "$plist"
+check "launchctl bootout called" called '"launchctl"' '"bootout"'
+run python3 "$bin/canary" --uninstall-launchagent
+check "uninstall is idempotent" exits 0
+
+newcase "doctor: INFO, never a failure, when the canary agent is missing"
+run bash "$bin/doctor"
+check "exit 0" exits 0
+check "INFO names the install command" has "$C/stdout" "INFO +canary LaunchAgent not installed.*--install-launchagent"
+check "no WARN or FAIL about it" hasnt "$C/stdout" "(WARN|FAIL) +canary"
+
+newcase "subpowers canary: wired in the front door"
+run bash "$bin/subpowers" canary
+check "exit 0" exits 0
+check "the report" has "$C/stdout" "OK: no drift"
+
+newcase "canary: no CLIs installed is not drift"
+P="$T/path-noclis"
+run python3 "$bin/canary"
+check "exit 0" exits 0
+check "says absent, not drift" has "$C/stdout" "absent"
+P="$T/path"
+
+newcase "canary: usage errors exit 2"
+run python3 "$bin/canary" --nonsense
+check "exit 2" exits 2
+
+newcase "update-codex: a post-update contract break warns loudly"
+run STUB_NPM_VERSION=0.158.0 bash "$bin/update-codex" --apply
+check "exit 0" exits 0
+check "no warning when the contract holds" hasnt "$C/stderr" "rollback"
+run STUB_NPM_VERSION=0.159.0 STUB_CODEX_HELP_DROP=--json bash "$bin/update-codex" --apply
+check "exit 0 still (no automatic rollback)" exits 0
+check "loud warning names the break" has "$C/stderr" "WARNING codex .*broke the subpowers contract"
+check "warning names the missing flag" has "$C/stderr" "--json"
+check "warning names the rollback with the previous version" has "$C/stderr" "npm i -g @openai/codex@0\\.158\\.0"
+
 echo "== install and help"
 newcase "install: a fresh machine with no CLIs"
 P="$T/path-noclis"

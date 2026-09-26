@@ -14,8 +14,51 @@ import fakeimg  # noqa: E402
 a = sys.argv[1:]
 _stub.log("grok", model_override=os.environ.get("GROK_IMAGE_GEN_MODEL_OVERRIDE"))
 
+HELP = """Grok Build TUI
+
+Usage: grok [OPTIONS] [PROMPT] [COMMAND]
+
+Options:
+      --allow <RULE>
+          Permission allow rule (compat alias: --allowedTools)
+      --cwd <CWD>
+          Working directory
+      --deny <RULE>
+          Permission deny rule (compat alias: --disallowedTools)
+      --disable-web-search
+          Disable web search and web fetch tools
+      --disallowed-tools <TOOLS>
+          Built-in tools to remove (comma-separated)
+  -m, --model <MODEL>
+          Model ID to use
+      --no-subagents
+          Disable subagent spawning
+      --output-format <OUTPUT_FORMAT>
+          Output format for headless mode
+
+          Possible values:
+          - plain
+          - json
+          - streaming-json:          NDJSON: one ACP session update per line, the agent's native format
+
+          [default: plain]
+
+      --prompt-file <PATH>
+          Single-turn prompt from a file
+
+      --reasoning-effort <EFFORT>
+          Reasoning effort for reasoning models
+
+          [aliases: --effort]
+
+      --tools <TOOLS>
+          Built-in tools to allow (comma-separated)
+"""
+
 if a[:1] == ["--version"]:
-    print("grok 1.0.41 (stub)")
+    print("grok " + os.environ.get("STUB_GROK_VERSION", "1.0.41") + " (4220f3b224a6) [stable]")
+elif a[:1] in (["--help"], ["-h"]):
+    print(_stub.drop_lines(HELP, "STUB_GROK_HELP_DROP"), end="")
 elif a[:1] == ["models"]:
     if os.environ.get("STUB_GROK_LOGGED_OUT"):
         print("Not logged in. Run: grok login")

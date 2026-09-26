@@ -14,10 +14,35 @@ import fakeimg  # noqa: E402
 a = sys.argv[1:]
 _stub.log("agy")
 profile = _stub.arg("--gemini_dir") or os.path.expanduser("~/.gemini")
-cmd = [v for v in a if not v.startswith("--gemini_dir")]
+# Go flags take both --gemini_dir=DIR and --gemini_dir DIR; drop either form.
+cmd = []
+skip_value = False
+for v in a:
+    if skip_value:
+        skip_value = False
+        continue
+    if v.startswith("--gemini_dir"):
+        if "=" not in v:
+            skip_value = True
+        continue
+    cmd.append(v)
+
+HELP = """Usage of agy:
+  --add-dir                       Add a directory to the workspace (repeatable) (default [])
+  --dangerously-skip-permissions  Auto-approve all tool permission requests without prompting
+  --disable-slash-commands        Disable slash command and skill expansion in print mode
+  --model                         Model for the current CLI session
+  --output-format                 Output format for print mode (text, json, stream-json) (default text)
+  -p                              Short alias for --print
+  --print                         Run a single prompt non-interactively and print the response
+  --print-timeout                 Optional time limit for print mode; 0 waits until the turn completes (default 0s)
+  --sandbox                       Run in a sandbox with terminal restrictions enabled
+"""
 
 if cmd[:1] == ["--version"]:
-    print("1.2.11")
+    print(os.environ.get("STUB_AGY_VERSION", "1.2.11"))
+elif cmd[:1] == ["--help"] or cmd[:1] == ["-h"]:
+    print(_stub.drop_lines(HELP, "STUB_AGY_HELP_DROP"), end="")
 elif cmd[:1] == ["models"]:
     if os.environ.get("STUB_AGY_LOGGED_OUT"):
         print("Please sign in: run agy")

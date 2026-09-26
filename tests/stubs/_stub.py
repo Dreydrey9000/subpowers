@@ -41,5 +41,13 @@ def arg(flag, default=""):
     return default
 
 
+def drop_lines(text, env_var):
+    """STUB_*_HELP_DROP=--flag: remove the help lines that carry it, to fake vendor drift."""
+    d = os.environ.get(env_var)
+    if d:
+        text = "\n".join(l for l in text.splitlines() if d not in l) + "\n"
+    return text
+
+
 DIMS = {"1:1": (1024, 1024), "16:9": (1376, 768), "9:16": (768, 1376), "4:3": (1184, 864), "3:4": (864, 1184),
         "3:2": (1248, 832), "2:3": (832, 1248), "2:1": (1280, 640), "1:2": (640, 1280), "auto": (1024, 1024)}

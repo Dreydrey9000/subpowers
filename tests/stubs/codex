@@ -13,9 +13,40 @@ import fakeimg  # noqa: E402
 a = sys.argv[1:]
 _stub.log("codex")
 home = os.environ.get("CODEX_HOME") or os.path.expanduser("~/.codex")
+# A successful `codex update` changes the installed version (the canary and
+# update-codex tests watch for exactly that).
+installed = os.path.join(home, "stub-installed-version")
+
+EXEC_HELP = """Run Codex non-interactively
+
+Usage: codex exec [OPTIONS] [PROMPT]
+
+Options:
+  -c, --config <key=value>
+          Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`
+  -C, --cd <DIR>
+          Tell the agent to use the specified directory as the working root
+  -i, --image <FILE>...
+          Optional image(s) to attach to the initial prompt
+  -m, --model <MODEL>
+          Model the agent should use
+  -s, --sandbox <SANDBOX_MODE>
+          Select the sandbox policy to use when executing model-generated shell commands
+
+          [possible values: read-only, workspace-write, danger-full-access]
+      --skip-git-repo-check
+          Allow running Codex outside a Git repository
+      --ignore-user-config
+          Do not load `$CODEX_HOME/config.toml`; auth still uses `CODEX_HOME`
+      --json
+          Print events to stdout as JSONL
+"""
 
 if a[:1] == ["--version"]:
-    print("codex-cli " + os.environ.get("STUB_CODEX_VERSION", "0.157.0"))
+    if os.path.exists(installed):
+        print("codex-cli " + open(installed).read().strip())
+    else:
+        print("codex-cli " + os.environ.get("STUB_CODEX_VERSION", "0.157.0"))
 elif a[:2] == ["login", "status"]:
     if os.environ.get("STUB_CODEX_LOGGED_OUT"):
         print("Not logged in", file=sys.stderr)
@@ -25,9 +56,12 @@ elif a[:2] == ["login", "status"]:
 elif a[:2] == ["features", "list"]:
     print("image_generation                  stable             true")
 elif a[:1] == ["update"]:
+    os.makedirs(home, exist_ok=True)
+    with open(installed, "w") as f:
+        f.write(os.environ.get("STUB_NPM_VERSION", "0.157.0"))
     print("codex updated")
 elif a[:1] == ["exec"] and "--help" in a:
-    print("Usage: codex exec [OPTIONS] [PROMPT]\n  --ignore-user-config  Do not load $CODEX_HOME/config.toml")
+    print(_stub.drop_lines(EXEC_HELP, "STUB_CODEX_HELP_DROP"), end="")
     _stub.chatty()
 elif a[:1] == ["exec"]:
     rest = a[1:]
