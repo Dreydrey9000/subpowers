@@ -49,7 +49,7 @@ run() {  # run [VAR=value...] CMD...: CMD in the case sandbox, bounded to $BOUND
   local t0; t0=$(date +%s)
   ( perl -e 'alarm shift; exec @ARGV' "${BOUND:-60}" \
       env -i HOME="$C/home" PATH="$P" TMPDIR="$C/tmp" STUB_LOG="$C/stub.log" STUB_PAINTS="$C/paints" \
-        SUBPOWERS_NO_AUTOUPDATE=1 PYTHONDONTWRITEBYTECODE=1 ${PYP:+PYTHONPATH=$PYP} "$@" \
+        SUBPOWERS_NO_AUTOUPDATE=1 PYTHONDONTWRITEBYTECODE=1 ${PYP:+"PYTHONPATH=$PYP"} "$@" \
       >"$C/stdout" 2>"$C/stderr" </dev/null; exit $? ) 2>/dev/null   # a second command keeps the kill notice in here
   rc=$?; took=$(( $(date +%s) - t0 ))
 }
@@ -71,7 +71,7 @@ f, w, h = fakeimg.dims(sys.argv[2]); print("%s %dx%d" % (f, w, h))' "$stubs" "$1
 }
 printed() { [[ "$(tail -n 1 "$C/stdout")" == "$1" ]] || { echo "        printed: $(tail -n 1 "$C/stdout")"; return 1; }; }
 called() { local m; m="$(grep -F -- "$1" "$C/stub.log")"; grep -qF -- "$2" <<<"$m"; }   # called <a stub call matching> <that also has>
-pillow() { env -i HOME="$T" PATH="$P" ${PYP:+PYTHONPATH=$PYP} python3 -c 'import PIL' 2>/dev/null; }   # as the cases see it: no user site-packages
+pillow() { env -i HOME="$T" PATH="$P" ${PYP:+"PYTHONPATH=$PYP"} python3 -c 'import PIL' 2>/dev/null; }   # as the cases see it: no user site-packages
 
 # Image ops exist when Pillow imports or sips is on the PATH. Without them a painter
 # delivers its own file, in its own format and size, and says so.

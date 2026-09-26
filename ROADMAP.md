@@ -20,6 +20,8 @@ subpowers turns subscriptions people already pay for into powers any agent can u
 - [x] Storyboards: `subpowers storyboard shots.txt outdir --refs NAME`
 - [x] Best-quality defaults: every helper model at high effort, Grok on xAI's quality Imagine model (automatic fallback), reference photos padded to the asked shape
 - [x] Your own defaults in `~/.subpowers/config` (helper model, effort, image model)
+- [x] Council mode (`--painter council`), the image library, and `subpowers slideshow`
+- [x] A test suite that runs every painter end to end against stand-in CLIs (no quota spent), in CI on Ubuntu and macOS
 
 ## Next: the video power (`subpowers video`)
 
@@ -40,7 +42,7 @@ Probed 2026-09-26, honestly:
 
 - [ ] **Browser lanes** for subscriptions with no CLI (web-only image and video models), run in a lightweight headless browser so it doesn't eat your RAM
 - [ ] **Second opinion / copy**: ask the ChatGPT, Gemini or Grok model inside your plan for a draft or a critique, with the same receipt habit
-- [ ] **Windows and Linux**: replace the macOS-only `sips` steps with a portable resize, and test the installer on both
+- [ ] **Windows and Linux**: image steps no longer need macOS (Pillow or `sips`), and CI runs the suite on Ubuntu with stand-in CLIs. Still to do: real Linux reports with the actual CLIs, and Windows
 - [ ] **More painters**: any subscription that ships an official CLI with a built-in image or video tool
 
 ## Won't do
