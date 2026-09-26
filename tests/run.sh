@@ -591,6 +591,22 @@ run bash "$bin/subpowers" help
 check "exit 0" exits 0
 check "usage text" has "$C/stderr" "Usage:"
 check "no code in the help" hasnt "$C/stderr" "set -euo"
+newcase "version: --version prints the version"
+run bash "$bin/subpowers" --version
+check "exit 0" exits 0
+check "names the version" has "$C/stdout" "^subpowers [0-9]+\.[0-9]+\.[0-9]+"
+
+echo "== bad input gets a plain answer"
+printf 'a wide shot\n' >"$T/shots.txt"
+newcase "storyboard: a flag with no value"
+run bash "$bin/subpowers" storyboard "$T/shots.txt" "$C/out/board" --painter
+check "exit 2" exits 2
+check "names the flag" has "$C/stderr" "--painter needs a value"
+check "no bash internals" hasnt "$C/stderr" "unbound variable"
+newcase "image: an unknown painter lists the real names"
+run bash "$bin/subpowers" image "a red mug" "$C/out/mug.png" --painter dalle
+check "exit 2" exits 2
+check "offers google and council" has "$C/stderr" "chatgpt, google, grok, council"
 
 echo
 echo "$pass passed, $fail failed"
