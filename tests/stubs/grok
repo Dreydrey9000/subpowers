@@ -79,6 +79,32 @@ elif "--prompt-file" in a:
     images = re.findall(r'"([^"]+)"', m.group(1)) if m else []
     _stub.log("grok-paint", tool=tool, aspect=aspect, images=len(images))
     sid = str(uuid.uuid4())
+    if tool == "reference_to_video":
+        if os.environ.get("STUB_GROK_ZDR"):
+            msg = ("Video generation tools are unavailable under zero data retention (ZDR). To enable, either turn off "
+                   "/privacy mode to disable ZDR or supply a user-hosted storage bucket")
+            for e in ({"type": "tool_call", "toolName": tool, "toolCallId": "call-1", "rawInput": {"prompt": prompt}},
+                      {"type": "tool_call_update", "toolCallId": "call-1", "status": "failed",
+                       "rawOutput": {"error": "tool_execution_failed", "message": msg}},
+                      {"type": "end", "sessionId": sid}):
+                print(json.dumps(e), flush=True)
+            sys.exit(0)
+        vid_dir = os.path.join(os.path.expanduser("~/.grok/sessions/stub"), sid, "videos")
+        os.makedirs(vid_dir, exist_ok=True)
+        saved = os.path.join(vid_dir, "1.mp4")
+        with open(saved, "wb") as fh:
+            fh.write(b"\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00mp42isom" + b"\x00" * 2048)
+        _stub.painted("grok", saved)
+        first = re.search(r'first_frame = "([^"]+)"', task)
+        raw = {"prompt": prompt, "aspect_ratio": aspect}
+        if first:
+            raw["first_frame"] = first.group(1)
+        for e in ({"type": "tool_call", "toolName": tool, "toolCallId": "call-1", "rawInput": raw},
+                  {"type": "tool_call_update", "toolCallId": "call-1", "status": "completed",
+                   "rawOutput": {"type": "ReferenceToVideo", "path": saved, "filename": "1.mp4"}},
+                  {"type": "end", "sessionId": sid}):
+            print(json.dumps(e), flush=True)
+        sys.exit(0)
     img_dir = os.path.join(os.path.expanduser("~/.grok/sessions/stub"), sid, "images")
     os.makedirs(img_dir, exist_ok=True)
     w, h = _stub.DIMS[aspect]

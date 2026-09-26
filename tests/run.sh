@@ -149,6 +149,37 @@ check "one paint" paints 1 grok
 check "receipt labels the Imagine model as requested" has "$C/out/fox.prompt.txt" "^  image model requested: grok-imagine-image-quality"
 check "receipt claims no answering model" hasnt "$C/out/fox.prompt.txt" "^  image model:"
 
+newcase "grok-video: a first frame becomes a clip"
+fakepng="$C/first.png"; python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import fakeimg; fakeimg.png(sys.argv[2], 1080, 1920)' "$stubs" "$fakepng"
+run bash "$bin/grok-video" "the fox turns toward the camera" "$C/out/fox.mp4" --first "$fakepng" --aspect 9:16 --duration 6 --resolution 720p
+check "exit 0" exits 0
+check "prints the video path" printed "$C/out/fox.mp4"
+check "an mp4 was delivered" has "$C/out/fox.mp4" "ftyp"
+check "receipt" test -f "$C/out/fox.prompt.txt"
+check "receipt names the tool" has "$C/out/fox.prompt.txt" "reference_to_video"
+check "receipt records the ask" has "$C/out/fox.prompt.txt" "asked: 6s 720p 9:16"
+check "one paint" paints 1 grok
+
+newcase "grok-video: needs an image or a voice"
+run bash "$bin/grok-video" "a fox" "$C/out/fox.mp4"
+check "exit 2" exits 2
+check "says why" has "$C/stderr" "video starts from an image"
+check "no paint" paints 0 grok
+
+newcase "grok-video: privacy mode names the fix"
+run STUB_GROK_ZDR=1 bash "$bin/grok-video" "a fox" "$C/out/fox.mp4" --first "$fakepng"
+check "exit 1" exits 1
+check "names /privacy" has "$C/stderr" "/privacy and choose Opt in"
+check "nothing delivered" test ! -e "$C/out/fox.mp4"
+
+newcase "video: no image, so it paints a first frame, then animates it"
+run bash "$bin/subpowers" video "a fox on a snowy rooftop" "$C/out/clip.mp4" --aspect 9:16
+check "exit 0" exits 0
+check "prints the clip path" printed "$C/out/clip.mp4"
+check "a first frame was painted" test -n "$(ls "$C/out"/clip.first.* 2>/dev/null)"
+check "says it painted the first frame" has "$C/stderr" "painting the first frame"
+check "the clip exists" has "$C/out/clip.mp4" "ftyp"
+
 newcase "grok: --ref edits into a 4:3 png"
 python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import fakeimg; fakeimg.png(sys.argv[2], 800, 600)' "$stubs" "$C/ref.png"
 run bash "$bin/grok-image" "the same product on a beach" "$C/out/beach.png" --size 1024x768 --ref "$C/ref.png"
