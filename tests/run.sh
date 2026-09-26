@@ -472,6 +472,17 @@ check "report carries a vendor-drift issue body" has "$driftmd" "vendor-drift"
 check "report names the flag" has "$driftmd" "--disallowed-tools"
 check "report says it stays local" has "$driftmd" "never posts"
 
+newcase "canary: a model list that fails once is retried, not called drift"
+run STUB_AGY_MODELS_FAIL=1 SUBPOWERS_CANARY_RETRY_PAUSE=0 python3 "$bin/canary"
+check "exit 0" exits 0
+check "agy line OK after the retry" has "$C/stdout" "agy +1\\.2\\.11 +9/9 +OK"
+check "no drift" has "$C/stdout" "OK: no drift"
+
+newcase "canary: a model list that keeps failing is drift that quotes the answer"
+run STUB_AGY_MODELS_FAIL=9 SUBPOWERS_CANARY_RETRY_PAUSE=0 python3 "$bin/canary"
+check "exit 1" exits 1
+check "says what agy answered" has "$C/stdout" "answered: Error: failed to fetch models"
+
 newcase "canary: a version change between two runs is reported"
 run STUB_GROK_VERSION=1.0.40 python3 "$bin/canary"
 check "first run exit 0" exits 0

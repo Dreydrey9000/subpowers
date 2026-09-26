@@ -33,6 +33,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 
 HERE = os.path.dirname(os.path.realpath(__file__))          # .../bin
 ROOT = os.path.dirname(HERE)                                 # the skill root
@@ -41,6 +42,9 @@ SP_HOME = os.environ.get("SUBPOWERS_HOME") or os.path.join(os.path.expanduser("~
 CANARY_DIR = os.path.join(SP_HOME, "canary")
 STATE = os.path.join(CANARY_DIR, "state.json")
 PROBE_TIMEOUT = 90
+# A CLI that errors or goes quiet once (agy fetches its model list over the network) is asked
+# again after this pause before anything is called drift: busy is not broken.
+RETRY_PAUSE = float(os.environ.get("SUBPOWERS_CANARY_RETRY_PAUSE", "5"))
 LAUNCHAGENT = "com.subpowers.canary"
 # What each CLI must NOT see, so a probe can never auth as an API key (same
 # lists the painters use).
@@ -316,6 +320,12 @@ def main():
                 outs[key] = probe(path, list(item["probe"]), cli)
             rc0, out, err = outs[key]
             holds, why_bad = item_holds(item, out, rc0)
+            if not holds and (not rc0 or err) and key + " #retried" not in outs:
+                time.sleep(RETRY_PAUSE)
+                outs[key] = probe(path, list(item["probe"]), cli)
+                outs[key + " #retried"] = True
+                rc0, out, err = outs[key]
+                holds, why_bad = item_holds(item, out, rc0)
             if holds:
                 r["items_ok"] += 1
             else:
@@ -327,8 +337,10 @@ def main():
                                         f"({item['id']}; {item['why']})")
                 else:
                     want = item.get("flag") or item.get("string") or item.get("istring") or item.get("regex")
+                    said = [l.strip() for l in out.splitlines() if l.strip()]
+                    answered = f"; it answered: {said[-1][:160]}" if not rc0 and said else ""
                     r["missing"].append(f"`{cli} {shown}` no longer carries {item_kind(item)} {want} "
-                                        f"({item['why']})")
+                                        f"({item['why']}){answered}")
         results[cli] = r
 
     drift = any(r["missing"] for r in results.values())

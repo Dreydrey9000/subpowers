@@ -47,6 +47,15 @@ elif cmd[:1] == ["models"]:
     if os.environ.get("STUB_AGY_LOGGED_OUT"):
         print("Please sign in: run agy")
         sys.exit(1)
+    fails = int(os.environ.get("STUB_AGY_MODELS_FAIL", "0"))  # the first N lookups fail, like a network blip
+    if fails:
+        count = os.path.join(os.path.expanduser("~"), ".stub-agy-models-calls")
+        n = int(open(count).read()) if os.path.exists(count) else 0
+        with open(count, "w") as f:
+            f.write(str(n + 1))
+        if n < fails:
+            print("Fetching available models...\nError: failed to fetch models (network unreachable)")
+            sys.exit(1)
     print("Fetching available models...")
     for v in ("3.8", "3.7"):
         for e in ("high", "medium", "low"):
