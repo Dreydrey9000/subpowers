@@ -40,6 +40,10 @@ Options:
           Do not load `$CODEX_HOME/config.toml`; auth still uses `CODEX_HOME`
       --json
           Print events to stdout as JSONL
+      --output-schema <FILE>
+          Path to a JSON Schema file describing the model's final response shape
+  -o, --output-last-message <FILE>
+          Specifies file where the last message from the agent should be written
 """
 
 if a[:1] == ["--version"]:
@@ -69,7 +73,7 @@ elif a[:1] == ["exec"]:
     i = 0
     while i < len(rest):
         v = rest[i]
-        if v in ("-c", "-m", "-C", "-s", "--model", "--cd", "--sandbox"):
+        if v in ("-c", "-m", "-C", "-s", "-o", "--model", "--cd", "--sandbox", "--output-schema", "--output-last-message"):
             i += 2
             continue
         if v == "-i":
@@ -87,6 +91,21 @@ elif a[:1] == ["exec"]:
         print(json.dumps({"type": "error", "message": err}))
         print(json.dumps({"type": "turn.failed", "error": {"message": err}}))
         sys.exit(1)
+    answer_file = _stub.arg("-o") or _stub.arg("--output-last-message")
+    if answer_file:  # a text-only call (bin/think): the answer lands in the -o file
+        if os.environ.get("STUB_THINK_FAIL"):
+            print(json.dumps({"type": "turn.failed", "error": {"message": "stub think failure"}}))
+            sys.exit(1)
+        ans = os.environ.get("STUB_THINK_ANSWER")
+        if ans is None:
+            m = re.search(r"exactly (\d+) frames", prompt)
+            ans = json.dumps({"frames": [f"stub frame {i + 1}" for i in range(int(m.group(1)))]}) if m else "stub answer"
+        with open(answer_file, "w") as f:
+            f.write(ans)
+        _stub.log("codex-think", answer=ans)
+        print(json.dumps({"type": "item.completed", "item": {"type": "agent_message", "text": ans}}))
+        print(json.dumps({"type": "turn.completed", "usage": {"input_tokens": 700, "output_tokens": 90}}))
+        sys.exit(0)
     if "Reply with exactly: pong" in prompt:
         err = os.environ.get("STUB_CODEX_LIVE_ERROR")
         if err:

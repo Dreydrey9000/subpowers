@@ -195,6 +195,103 @@ run bash "$bin/subpowers" image "a red mug" "$C/out/mug.png"
 check "exit 0" exits 0
 check "one paint in total" paints 1
 
+echo "== think: a text answer on the same subscriptions"
+newcase "think: chatgpt answers"
+run bash "$bin/think" "name one color"
+check "exit 0" exits 0
+check "prints the answer" printed "stub answer"
+check "asked codex for text, read-only, no shell" called '"codex"' '"-o"'
+check "the call is read-only" called '"codex"' '"read-only"'
+check "no image was painted" paints 0
+
+newcase "think: --json-schema returns one clean JSON object"
+echo '{"type":"object","properties":{"a":{"type":"integer"}},"required":["a"]}' >"$C/schema.json"
+run STUB_THINK_ANSWER='Sure! ```json
+{"a": 1}
+```' bash "$bin/think" "give me a" --json-schema "$C/schema.json"
+check "exit 0" exits 0
+check "prints only the object" printed '{"a": 1}'
+check "codex was held to the schema" called '"codex"' '"--output-schema"'
+
+newcase "think: an answer that is not JSON fails loudly"
+echo '{"type":"object","properties":{"a":{"type":"integer"}},"required":["a"]}' >"$C/schema.json"
+run STUB_THINK_ANSWER='no json here' bash "$bin/think" "give me a" --json-schema "$C/schema.json" --thinker chatgpt
+check "exit 1" exits 1
+check "says why" has "$C/stderr" "did not answer with valid JSON"
+
+newcase "think: ChatGPT logged out, Google answers"
+run STUB_CODEX_LOGGED_OUT=1 bash "$bin/think" "name one color"
+check "exit 0" exits 0
+check "antigravity answered" called '"agy-think"' 'stub answer'
+check "says who answered" has "$C/stderr" "antigravity answered"
+
+newcase "think: nothing connected"
+P="$T/path-noclis" run bash "$bin/think" "name one color"
+check "exit 3" exits 3
+check "points at doctor" has "$C/stderr" "subpowers doctor"
+
+echo "== stopmotion: frames painted from frame 1, then a clip"
+mkpath "$T/path-ff" codex agy grok curl ffmpeg
+if [[ -n "${SUBPOWERS_TEST_SIPS:-}" ]] && p="$(type -P sips)"; then ln -sf "$p" "$T/path-ff/sips"; fi
+
+newcase "stopmotion: plans 4 frames, paints frame 1, then 3 from it, makes an mp4"
+P="$T/path-ff" run bash "$bin/subpowers" stopmotion "a paper boat crosses a wooden desk" "$C/out/boat.mp4" --frames 4 --fps 4
+check "exit 0" exits 0
+check "prints the clip" printed "$C/out/boat.mp4"
+check "the clip exists" has "$C/out/boat.mp4" "ftyp"
+check "four frames painted" paints 4 codex
+check "four frame files" test "$(ls "$C/out/boat.frames"/frame-0[1-4].png 2>/dev/null | wc -l | tr -d ' ')" = 4
+check "the plan was asked for exactly 4 frames" called '"codex"' 'exactly 4 frames'
+check "the plan is kept" has "$C/out/boat.frames/plan.txt" "stub frame 4"
+check "the planner is told never to draw the path" called '"codex"' 'no dotted lines, paths, arrows or marks'
+check "every frame is told to add no marks" has "$C/out/boat.frames/frame-03.prompt.txt" "no lines, paths, arrows or marks"
+check "frame 2 was painted from frame 1" has "$C/out/boat.frames/frame-02.prompt.txt" "references: 1 .*frame-01"
+check "frame 4 was painted from frame 1" has "$C/out/boat.frames/frame-04.prompt.txt" "references: 1 .*frame-01"
+check "encoded for every phone" called '"ffmpeg"' '"yuv420p"'
+check "starts playing before it downloads" called '"ffmpeg"' '"+faststart"'
+check "encodes an image sequence, never the concat demuxer (the cut guard's line)" called '"ffmpeg"' '"-framerate"'
+check "no concat anywhere" hasnt "$C/stub.log" '"concat"'
+check "receipt names the door" has "$C/out/boat.prompt.txt" "door: subpowers stopmotion \(chatgpt\)"
+check "receipt keeps the concept" has "$C/out/boat.prompt.txt" "a paper boat crosses a wooden desk"
+check "indexed in the library" has "$C/home/.subpowers/library.jsonl" "boat.mp4"
+if pillow; then check "a looping webp too" magic "$C/out/boat.webp" 524946; fi
+
+newcase "stopmotion --chain: each frame is painted from the one before"
+P="$T/path-ff" run bash "$bin/subpowers" stopmotion "a paper boat crosses a wooden desk" "$C/out/boat.mp4" --frames 3 --chain
+check "exit 0" exits 0
+check "frame 3 was painted from frame 2" has "$C/out/boat.frames/frame-03.prompt.txt" "references: 1 .*frame-02"
+check "receipt says chained" has "$C/out/boat.prompt.txt" "mode: chained"
+
+newcase "stopmotion --plan: your own frame list, no planner call"
+printf 'a boat at the left edge of a desk\nthe boat in the middle\n\nthe boat at the right edge\n' >"$C/plan.txt"
+P="$T/path-ff" run bash "$bin/subpowers" stopmotion "boat" "$C/out/boat.mp4" --plan "$C/plan.txt"
+check "exit 0" exits 0
+check "three frames, one per line" paints 3 codex
+check "no planner call" hasnt "$C/stub.log" '"codex-think"'
+
+newcase "stopmotion without ffmpeg: the loop still ships"
+run bash "$bin/subpowers" stopmotion "a paper boat" "$C/out/boat.mp4" --frames 3
+check "exit 0" exits 0
+check "names ffmpeg" has "$C/stderr" "ffmpeg"
+check "receipt does not claim an mp4" hasnt "$C/out/boat.prompt.txt" "in the mp4"
+if pillow; then check "prints the webp" printed "$C/out/boat.webp"
+else check "prints the frames folder" printed "$C/out/boat.frames"; fi
+
+newcase "stopmotion --resume: keeps the plan and the painted frames, paints only what is missing"
+P="$T/path-ff" run bash "$bin/subpowers" stopmotion "a paper boat" "$C/out/boat.mp4" --frames 3
+rm -f "$C/out/boat.frames/frame-03.png" "$C/out/boat.mp4"; : >"$C/paints"; : >"$C/stub.log"
+P="$T/path-ff" run bash "$bin/subpowers" stopmotion "a paper boat" "$C/out/boat.mp4" --frames 3 --resume
+check "exit 0" exits 0
+check "only the missing frame was painted" paints 1 codex
+check "no new plan" hasnt "$C/stub.log" '"codex-think"'
+check "the clip is back" has "$C/out/boat.mp4" "ftyp"
+
+newcase "stopmotion: one painter per clip"
+P="$T/path-ff" run bash "$bin/subpowers" stopmotion "a paper boat" "$C/out/boat.mp4" --painter council
+check "exit 2" exits 2
+check "says why" has "$C/stderr" "one painter per clip"
+check "nothing painted" paints 0
+
 echo "== a paint that cannot be delivered"
 for p in chatgpt antigravity grok; do
   newcase "$p: delivery fails after the paint"

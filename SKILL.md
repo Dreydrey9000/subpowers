@@ -65,6 +65,22 @@ subpowers video "<prompt>" /abs/out.mp4 [--first IMG] [--last IMG] [--ref IMG]..
 - Describe motion as a change of position ("turns from the city toward the camera"), one clear action per clip.
 - `grok-video` fails with "unavailable under zero data retention" when the user's Grok account is in privacy mode: tell them to run `grok`, type `/privacy`, choose Opt in (xAI then keeps that data), or set up a video storage bucket. Never fake a video from stills.
 
+## Stop-motion
+
+```bash
+subpowers stopmotion "<concept>" /abs/out.mp4 [--frames 8] [--fps 6] [--painter P] [--refs NAME] [--style "..."] [--chain] [--plan frames.txt] [--audio bed.m4a] [--resume]
+```
+
+- One sentence in, a handmade stop-motion clip out: a subscription plans the frames (`subpowers think`), frame 1 is painted, then every later frame is painted with frame 1 as its reference so the set and the character stay the same (`--chain` paints each from the one before instead, slower and more drift). Delivers `out.mp4` (H.264, yuv420p, faststart, needs ffmpeg), a looping `out.webp` (needs Pillow), `out.frames/` with every frame and its receipt, and `out.prompt.txt`.
+- One painter per clip (a council would redraw the set three ways). ChatGPT keeps characters most consistent; Antigravity is fastest.
+- Frames can fail on a spent quota: `--resume` keeps the plan and the painted frames and paints only what is missing. `--plan FILE` (one frame per line) skips the planner.
+- Look at `out.frames/` before showing the clip. The planner is told never to draw paths or marks, but check anyway.
+- The clip is silent unless you pass `--audio`.
+
+## Plan with `think`
+
+`subpowers think "<question>" [--json-schema FILE]` answers in text on the same subscriptions (ChatGPT first, then Google, then Grok; no shell, no web, no API key). With a schema it prints one JSON object that parses, or fails loudly.
+
 ## Always the best model
 
 - Painters are chosen server-side by OpenAI, Google and xAI on every call, so they cannot go stale. Grok asks for xAI's quality Imagine model and falls back to xAI's default when a plan lacks it (the receipt names which one painted).

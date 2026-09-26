@@ -29,7 +29,8 @@ Probed 2026-09-26, honestly:
 
 - [x] **Grok Imagine video**: `subpowers video` (first frame, references, voices, 1 to 15 s, 480p/720p, with sound; paints a first frame when you give none)
 - [ ] **Google Gemini Omni** (video from text plus up to 5 photo references, 10 s) is included in Google AI Plus, Pro and Ultra, but only inside the Gemini app, Flow and Vids. Not reachable from the `agy` CLI yet, so it needs a browser driver.
-- [ ] ChatGPT: no video door (OpenAI shut Sora down in 2026).
+- [x] **Stop-motion on ChatGPT Images**: `subpowers stopmotion` plans the frames, paints frame 1, paints the rest from it, returns an mp4 and a looping webp (`--resume` after a spent quota)
+- [ ] ChatGPT: no native video door (OpenAI shut Sora down in 2026); stop-motion from stills is the ChatGPT motion path.
 - [ ] A daily probe that turns on a native CLI lane the day `generate_video` appears in `codex` or `agy`.
 
 ## Next: the Studio
@@ -41,6 +42,7 @@ Probed 2026-09-26, honestly:
 ## Later: more powers
 
 - [ ] **Browser lanes** for subscriptions with no CLI (web-only image and video models), run in a lightweight headless browser so it doesn't eat your RAM
+- [x] **Plan in text**: `subpowers think` answers on the same subscriptions (JSON with a schema); it plans stop-motion frames today
 - [ ] **Second opinion / copy**: ask the ChatGPT, Gemini or Grok model inside your plan for a draft or a critique, with the same receipt habit
 - [ ] **Windows and Linux**: image steps no longer need macOS (Pillow or `sips`), and CI runs the suite on Ubuntu with stand-in CLIs. Still to do: real Linux reports with the actual CLIs, and Windows
 - [ ] **More painters**: any subscription that ships an official CLI with a built-in image or video tool

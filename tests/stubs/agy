@@ -53,6 +53,15 @@ elif cmd[:1] == ["models"]:
             print(f"gemini-{v}-flash-{e}\tGemini {v} Flash ({e.title()})")
     print("gemini-3.1-pro-high\tGemini 3.1 Pro (High)")
     _stub.chatty()
+elif "-p" in cmd and _stub.arg("--output-format") == "text":  # a text-only call (bin/think)
+    if os.environ.get("STUB_THINK_FAIL"):
+        sys.exit(1)
+    ans = os.environ.get("STUB_THINK_ANSWER")
+    if ans is None:
+        m = re.search(r"exactly (\d+) frames", _stub.arg("-p"))
+        ans = json.dumps({"frames": [f"stub frame {i + 1}" for i in range(int(m.group(1)))]}) if m else "stub answer"
+    _stub.log("agy" + "-think", answer=ans)
+    print(ans)
 elif "-p" in cmd:
     task = _stub.arg("-p")
     m = re.search(r'AspectRatio to "([0-9:]+)"', task)

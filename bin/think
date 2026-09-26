@@ -1,0 +1,143 @@
+#!/usr/bin/env bash
+# think: one text answer from the same subscriptions that paint (ChatGPT, Google, Grok), no API key.
+# subpowers uses it to plan: the frames of a stop-motion clip, the slides of a carousel.
+#
+# Usage: think "<prompt>" [--json-schema FILE] [--thinker auto|chatgpt|antigravity|grok]
+#   stdout  the answer text (with --json-schema: one JSON object that matches the schema)
+#   exit    0 answered, 2 usage, 3 no subscription connected, 1 every connected one failed
+#
+# Each call is kept lean like the painters: no user config, no MCP servers, no project
+# docs, no shell, no web. With --json-schema ChatGPT is held to the schema by codex;
+# the others get the schema in the prompt and their answer is checked as JSON here.
+set -euo pipefail
+
+src="${BASH_SOURCE[0]}"
+while [[ -L "$src" ]]; do
+  d="$(cd "$(dirname "$src")" && pwd)"; src="$(readlink "$src")"
+  [[ "$src" != /* ]] && src="$d/$src"
+done
+here="$(cd "$(dirname "$src")" && pwd)"
+
+# Per-user picks (same file and keys as the painters); the environment wins.
+sp_cfg="${SUBPOWERS_HOME:-$HOME/.subpowers}/config"
+if [[ -f "$sp_cfg" ]]; then
+  while IFS='=' read -r sp_k sp_v || [[ -n "$sp_k" ]]; do
+    [[ "$sp_k" =~ ^(CHATGPT|AGY|GROK)_IMAGE_[A-Z_]+$ ]] || continue
+    sp_v="${sp_v%\"}"; sp_v="${sp_v#\"}"
+    [[ -z "${!sp_k+x}" ]] && export "$sp_k=$sp_v"
+  done < "$sp_cfg"
+fi
+
+usage() { echo 'usage: think "<prompt>" [--json-schema FILE] [--thinker auto|chatgpt|antigravity|grok]' >&2; exit 2; }
+say() { echo "think: $*" >&2; }
+[[ $# -ge 1 ]] || usage
+prompt="$1"; shift
+schema=""; thinker="${SUBPOWERS_THINKER:-auto}"
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --json-schema) [[ $# -ge 2 ]] || usage; schema="$2"; shift 2 ;;
+    --thinker) [[ $# -ge 2 ]] || usage; thinker="$2"; shift 2 ;;
+    *) usage ;;
+  esac
+done
+[[ -z "$schema" || -f "$schema" ]] || { say "schema file not found: $schema"; exit 2; }
+case "$thinker" in openai|gpt) thinker=chatgpt ;; google|gemini) thinker=antigravity ;; xai) thinker=grok ;; esac
+
+work="$(mktemp -d "${TMPDIR:-/tmp}/think.XXXXXX")"
+trap 'rm -rf "$work"' EXIT
+lean="Answer directly from what you know. Do not run commands, read files, browse, or follow start-up routines."
+ask="$prompt
+
+$lean"
+if [[ -n "$schema" ]]; then
+  ask="$ask
+Reply with only one JSON object that matches this JSON Schema, and nothing else:
+$(cat "$schema")"
+fi
+
+# Pull one JSON object out of an answer (a model may wrap it in a code fence) and
+# check it parses; print it compact. Exit 1 when there is no valid object.
+json_only() {
+  python3 -c '
+import json, re, sys
+t = sys.stdin.read().strip()
+m = re.search(r"```(?:json)?\s*(.*?)```", t, re.S)
+if m: t = m.group(1).strip()
+i, j = t.find("{"), t.rfind("}")
+if i < 0 or j < i: sys.exit(1)
+try: print(json.dumps(json.loads(t[i:j + 1]), ensure_ascii=False))
+except ValueError: sys.exit(1)
+'
+}
+
+try_chatgpt() {
+  command -v codex >/dev/null 2>&1 || return 3
+  local o; o="$(codex login status 2>&1)" || true
+  grep -qi chatgpt <<<"$o" || return 3
+  local models effort m answer="$work/answer.txt" iso=() sargs=()
+  models="${CHATGPT_IMAGE_DRIVERS:-$(python3 "$here/resolve-drivers" 2>/dev/null || echo default)}"
+  effort="${CHATGPT_IMAGE_EFFORT:-high}"
+  iso=(-c 'model_provider="openai"' -c 'openai_base_url="https://chatgpt.com/backend-api/codex"' -c 'mcp_servers={}'
+       -c 'project_doc_max_bytes=0' -c 'features.shell_tool=false')
+  o="$(codex exec --help 2>/dev/null)" || true
+  grep -q -- '--ignore-user-config' <<<"$o" && iso+=(--ignore-user-config)
+  [[ -n "$schema" ]] && grep -q -- '--output-schema' <<<"$o" && sargs=(--output-schema "$schema")
+  for m in ${models//:/ }; do
+    local margs=(-c "model_reasoning_effort=\"${effort}\"")
+    [[ "$m" != default ]] && margs+=(-m "$m")
+    rm -f "$answer"
+    if env -u OPENAI_API_KEY -u OPENAI_BASE_URL -u CODEX_API_KEY codex exec "${iso[@]}" "${margs[@]}" \
+         --json --skip-git-repo-check -s read-only -C "$work" ${sargs[@]+"${sargs[@]}"} -o "$answer" "$ask" \
+         </dev/null >"$work/codex.jsonl" 2>"$work/codex.err" && [[ -s "$answer" ]]; then
+      cat "$answer"; return 0
+    fi
+    grep -qiE "usage limit|rate_limit|quota|model_not_found|not supported|not available" "$work/codex.jsonl" "$work/codex.err" && continue
+    break
+  done
+  return 1
+}
+
+try_grok() {
+  command -v grok >/dev/null 2>&1 || return 3
+  local o; o="$(cd "$work" && grok models 2>&1)" || true
+  grep -qi 'logged in with grok.com' <<<"$o" || return 3
+  (cd "$work" && grok -p "$ask" --no-subagents --disable-web-search --disallowed-tools search_tool,use_tool) \
+    </dev/null 2>"$work/grok.err"
+}
+
+try_antigravity() {
+  local a; a="$(command -v agy 2>/dev/null || echo "$HOME/.local/bin/agy")"
+  [[ -x "$a" ]] || return 3
+  local profile="$work/profile"
+  mkdir -p "$profile/config/projects"
+  [[ -f "$HOME/.gemini/config/config.json" ]] && cp "$HOME/.gemini/config/config.json" "$profile/config/config.json"
+  [[ -f "$HOME/.gemini/config/projects/default-cli-project.json" ]] && \
+    cp "$HOME/.gemini/config/projects/default-cli-project.json" "$profile/config/projects/default-cli-project.json"
+  printf '{"mcpServers":{}}\n' > "$profile/config/mcp_config.json"
+  local o; o="$(cd "$work" && "$a" --gemini_dir="$profile" models 2>&1)" || true
+  grep -qE '^gemini-' <<<"$o" || return 3
+  (cd "$work" && env -u GEMINI_API_KEY -u GOOGLE_API_KEY "$a" --gemini_dir="$profile" -p "$ask" \
+     --output-format text --print-timeout "${THINK_TIMEOUT:-300}s" --sandbox) </dev/null 2>"$work/agy.err"
+}
+
+if [[ "$thinker" == auto ]]; then order="chatgpt antigravity grok"; else order="$thinker"; fi
+connected=0
+for t in $order; do
+  case "$t" in chatgpt|antigravity|grok) ;; *) say "unknown thinker '$t' (chatgpt, antigravity, grok)"; exit 2 ;; esac
+  t0=$(date +%s)
+  set +e; out="$("try_$t")"; rc=$?; set -e
+  if [[ $rc -eq 3 ]]; then [[ "$thinker" != auto ]] && say "$t is not connected"; continue; fi
+  connected=1
+  if [[ $rc -eq 0 && -n "${out// /}" ]]; then
+    if [[ -n "$schema" ]]; then
+      if js="$(printf '%s' "$out" | json_only)"; then out="$js"
+      else say "$t did not answer with valid JSON"; [[ "$thinker" == auto ]] && continue; exit 1; fi
+    fi
+    say "$t answered in $(( $(date +%s) - t0 )) s"
+    printf '%s\n' "$out"; exit 0
+  fi
+  say "$t failed (exit $rc)"
+  [[ "$thinker" == auto ]] || exit 1
+done
+[[ $connected -eq 1 ]] || { say "no subscription is connected. Run: subpowers doctor"; exit 3; }
+say "every connected subscription failed"; exit 1

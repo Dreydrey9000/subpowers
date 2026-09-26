@@ -66,6 +66,15 @@ elif a[:1] == ["models"]:
     print("You are logged in with grok.com.\n\nDefault model: grok-4.7-build-fast\n\nAvailable models:")
     print("  - grok-4.7\n  * grok-4.7-build-fast (default)\n  - grok-4.6")
     _stub.chatty()
+elif "-p" in a:  # a text-only call (bin/think)
+    if os.environ.get("STUB_THINK_FAIL"):
+        sys.exit(1)
+    ans = os.environ.get("STUB_THINK_ANSWER")
+    if ans is None:
+        m = re.search(r"exactly (\d+) frames", _stub.arg("-p"))
+        ans = json.dumps({"frames": [f"stub frame {i + 1}" for i in range(int(m.group(1)))]}) if m else "stub answer"
+    _stub.log("grok" + "-think", answer=ans)
+    print(ans)
 elif "--prompt-file" in a:
     hang = os.environ.get("STUB_GROK_HANG")
     if hang:

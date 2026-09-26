@@ -143,6 +143,11 @@ The receipt also says when an image was cropped or upscaled locally, so nothing 
 
 **Video.** `subpowers video "<prompt>" out.mp4` makes a short clip with sound on your SuperGrok plan (Grok Imagine video, 1 to 15 s, 480p or 720p). Give it a first frame with `--first img.png`, people or products with `--ref`/`--refs`, or nothing at all and it paints the first frame for you on your image plan, then animates it. Accounts in Grok's privacy mode (`/privacy` set to Opt out) need to opt in or add a video storage bucket first. Google's Gemini Omni video is on the [roadmap](ROADMAP.md).
 
+**Stop-motion.** `subpowers stopmotion "a small clay fox tiptoes across a felt meadow and waves" out.mp4` plans the frames on your subscription, paints frame 1, then paints every other frame from frame 1 so the set and the character stay put, and hands back an mp4 plus a looping webp. `--resume` picks up after a spent quota without repainting what is done.
+
+<p align="center"><img src="assets/stopmotion-clay-fox.webp" width="360" alt="Eight ChatGPT-painted frames of a clay fox waving, played as a stop-motion loop"></p>
+<p align="center"><sub>One sentence, 8 frames on a ChatGPT plan, 4 min 38 s. Real output, not retouched.</sub></p>
+
 ## Beyond one image
 
 ```bash
