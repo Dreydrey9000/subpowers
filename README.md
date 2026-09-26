@@ -206,10 +206,11 @@ Never ask the user for an API key, and never put one in. subpowers only uses the
 
 ## Good to know
 
-- Images use your plan's normal usage limits; an image costs more of your allowance than a text message. If you run out, it says so and waits for the reset. It never switches to a paid API.
+- Images use your plan's normal usage limits; an image costs more of your allowance than a text message. If you run out, that painter says so and stops, and `auto` moves on to your next connected plan. Nothing waits for the reset, and it never switches to a paid API.
 - This rides on the official `codex` and `agy` command-line tools, not on a published image API, so providers can change behavior. The doctor and the daily codex update are there for exactly that.
+- `agy` has no per-tool allowlist, so the Antigravity painter cannot limit its helper to the image tool. Each call skips agy's permission prompts, so it runs with `--sandbox`, an empty temporary profile (no MCP servers) and a temporary folder.
 - Use your own login on your own machine. Don't share credentials or use this to resell access.
-- The hero is a parody illustration of public figures: they did not pose for it and do not endorse subpowers. The phone-case logos show which plan each one stands for. subpowers will not make photorealistic images of real people in made-up scenes.
+- The hero is a parody illustration of public figures: they did not pose for it and do not endorse subpowers. The phone-case logos show which plan each one stands for. Please don't use subpowers to make photorealistic images of real people in made-up scenes. Nothing in the code prevents it, and each provider's own rules still apply.
 - subpowers is an independent open-source project. ChatGPT and Codex are trademarks of OpenAI; Antigravity, Gemini and Nano Banana are trademarks of Google; Grok and Grok Imagine are trademarks of xAI. None of them made or endorses this.
 
 ## What's next: build it with us
