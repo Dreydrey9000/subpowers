@@ -258,11 +258,13 @@ resized=""
 # the file and resize the deliverable locally (free, lossless PNG).
 if [[ -n "$size" && -n "$raw_dims" && "$raw_dims" != "$size" ]]; then
   rw="${raw_dims%x*}"; rh="${raw_dims#*x}"; sw="${size%x*}"; sh="${size#*x}"
-  if (( rw * sh == rh * sw )) && command -v sips >/dev/null 2>&1; then
+  # Aspect counts as "the same" within 1% (the painter returns e.g. 1122x1402 for a 4:5 ask).
+  dd=$(( rw * sh - rh * sw )); ok_aspect=""; (( dd * dd * 10000 <= (rh * sw) * (rh * sw) )) && ok_aspect=1
+  if [[ -n "$ok_aspect" ]] && command -v sips >/dev/null 2>&1; then
     cp "$out" "${stem}.original.png"
     sips -z "$sh" "$sw" "$out" >/dev/null
     resized="resized locally from ${raw_dims}; signed original kept at ${stem}.original.png"
-  elif (( rw * sh == rh * sw )); then
+  elif [[ -n "$ok_aspect" ]]; then
     resized="NOT resized: painter returned ${raw_dims}; sips (macOS) is not available here"
     echo "chatgpt-image: WARNING ${resized}" >&2
   else

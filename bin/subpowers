@@ -2,16 +2,18 @@
 # subpowers: the AI subscriptions you already pay for, as powers for every agent.
 #
 # Usage:
-#   subpowers image "<prompt>" out.png [--painter chatgpt|antigravity] [--size WxH] [--ref IMG]...
-#   subpowers doctor [--fix] [--smoke]     is this machine ready? what to fix?
-#   subpowers powers                       which subscriptions are connected right now
-#   subpowers update                       pull the latest subpowers (git installs)
+#   subpowers image "<prompt>" out.png [--painter P|all] [--size WxH] [--ref IMG]... [--refs NAME]
+#   subpowers sheet NAME out.png [--painter P|all]      character sheet (front, sides, 3/4, close-up)
+#   subpowers storyboard shots.txt OUTDIR [--refs NAME] [--painter P] [--size WxH] [--style "..."]
+#   subpowers refs add NAME IMG...  |  refs list [NAME]  |  refs path NAME
+#   subpowers doctor [--fix] [--smoke]  |  powers  |  update
 #
 # Painters (each runs on YOUR login, never an API key):
 #   chatgpt      OpenAI's current image model through the codex CLI (ChatGPT plan). 60-100 s.
-#   antigravity  Google's Nano Banana 2 through the Antigravity CLI (Google AI plan). ~20 s.
-# --painter auto (the default) uses ChatGPT when codex is logged in, else Antigravity.
-# SUBPOWERS_PAINTER=antigravity changes the default.
+#   antigravity  Google's Nano Banana 2 through the Antigravity CLI (Google AI plan). ~20-40 s.
+#   grok         xAI's Grok Imagine through the Grok CLI (SuperGrok plan). ~35-45 s.
+# --painter auto (default): the first connected painter; if it fails (paused plan, quota), the next.
+# --painter all: every connected painter in parallel, plus a side-by-side sheet. SUBPOWERS_PAINTER sets the default.
 set -euo pipefail
 
 src="${BASH_SOURCE[0]}"
@@ -20,50 +22,205 @@ while [[ -L "$src" ]]; do
   [[ "$src" != /* ]] && src="$d/$src"
 done
 here="$(cd "$(dirname "$src")" && pwd)"
+HOME_DIR="${SUBPOWERS_HOME:-$HOME/.subpowers}"
+ORDER="chatgpt antigravity grok"
 
-usage() { sed -n '2,14p' "$here/subpowers" | sed 's/^# \{0,1\}//' >&2; exit "${1:-2}"; }
+usage() { sed -n '2,18p' "$here/subpowers" | sed 's/^# \{0,1\}//' >&2; exit "${1:-2}"; }
+say() { echo "subpowers: $*" >&2; }
 
 has_chatgpt() { command -v codex >/dev/null 2>&1 && codex login status 2>&1 | grep -qi chatgpt; }
 has_antigravity() { command -v agy >/dev/null 2>&1 || [[ -x "$HOME/.local/bin/agy" ]]; }
+has_grok() { command -v grok >/dev/null 2>&1; }
+has() { case "$1" in chatgpt) has_chatgpt ;; antigravity) has_antigravity ;; grok) has_grok ;; *) return 1 ;; esac; }
+connected() { local p out=""; for p in $ORDER; do has "$p" && out="$out $p"; done; echo "${out# }"; }
+norm_painter() {
+  case "$1" in
+    openai|gpt) echo chatgpt ;;
+    google|gemini|nano-banana|nanobanana) echo antigravity ;;
+    xai|imagine|grok-imagine|supergrok) echo grok ;;
+    *) echo "$1" ;;
+  esac
+}
+
+# Reference sets: $SUBPOWERS_HOME/refs/NAME/*.{jpg,jpeg,png,webp,heic}. Hidden and ._ files are skipped.
+ref_files() {
+  local dir="$HOME_DIR/refs/$1"
+  [[ -d "$dir" ]] || { say "no reference set '$1' (make one: subpowers refs add $1 photo1.jpg photo2.jpg)"; return 3; }
+  find "$dir" -maxdepth 1 -type f \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.webp' -o -iname '*.heic' \) ! -name '.*' | sort
+}
+
+# Run one painter; on a non-usage failure in auto mode, try the next connected painter.
+# Antigravity takes at most 3 references, so extra ones are dropped for it (with a note).
+paint() {  # paint <painter|auto> <prompt> <out> [painter args...]
+  local want="$1" prompt="$2" out="$3"; shift 3
+  local tries rc p
+  if [[ "$want" == auto ]]; then tries="$(connected)"; else tries="$want"; fi
+  [[ -n "$tries" ]] || { say "no painter is connected. Run: subpowers doctor"; return 3; }
+  for p in $tries; do
+    has "$p" || { say "$p is not connected (paused or logged out); skipping"; continue; }
+    local args=() nref=0 a skip=""
+    for a in "$@"; do
+      if [[ -n "$skip" ]]; then
+        skip=""; nref=$((nref+1))
+        if [[ "$p" == antigravity && $nref -gt 3 ]]; then continue; fi
+        args+=(--ref "$a"); continue
+      fi
+      if [[ "$a" == --ref ]]; then skip=1; continue; fi
+      args+=("$a")
+    done
+    if [[ "$p" == antigravity && $nref -gt 3 ]]; then say "antigravity takes 3 references; using the first 3 of $nref"; fi
+    set +e
+    bash "$here/${p}-image" "$prompt" "$out" ${args[@]+"${args[@]}"}
+    rc=$?
+    set -e
+    [[ $rc -eq 0 ]] && return 0
+    [[ $rc -eq 2 ]] && return 2
+    if [[ "$want" == auto ]]; then say "$p failed (exit $rc); trying the next painter"; else return $rc; fi
+  done
+  say "every connected painter failed"; return 1
+}
+
+# Side-by-side sheet of several images with labels (needs python3 + Pillow; skipped quietly otherwise).
+contact_sheet() {  # contact_sheet <out.jpg> <label=path>...
+  local out="$1"; shift
+  python3 - "$out" "$@" <<'PY' 2>/dev/null || return 0
+import sys
+from PIL import Image, ImageDraw, ImageFont
+out, items = sys.argv[1], [a.split("=", 1) for a in sys.argv[2:]]
+try: font = ImageFont.truetype("/System/Library/Fonts/HelveticaNeue.ttc", 28)
+except Exception: font = ImageFont.load_default()
+H = 640; tiles = []
+for label, path in items:
+    try: im = Image.open(path).convert("RGB")
+    except Exception: continue
+    tiles.append((label, im.resize((max(1, int(im.width * H / im.height)), H))))
+if not tiles: sys.exit(0)
+per_row = 3 if len(tiles) > 4 else len(tiles)
+rows = [tiles[i:i + per_row] for i in range(0, len(tiles), per_row)]
+W = max(sum(t.width for _, t in r) + 20 * (len(r) - 1) for r in rows)
+sheet = Image.new("RGB", (W, len(rows) * (H + 60)), (255, 255, 255)); d = ImageDraw.Draw(sheet); y = 0
+for r in rows:
+    x = 0
+    for label, t in r:
+        d.text((x + 6, y + 14), label, fill=(30, 30, 30), font=font); sheet.paste(t, (x, y + 56)); x += t.width + 20
+    y += H + 60
+sheet.save(out, quality=86); print(out)
+PY
+}
 
 cmd="${1:-help}"; [[ $# -gt 0 ]] && shift
 case "$cmd" in
   image|draw)
-    painter="${SUBPOWERS_PAINTER:-auto}"; args=()
+    [[ $# -ge 2 ]] || usage
+    prompt="$1"; out="$2"; shift 2
+    painter="$(norm_painter "${SUBPOWERS_PAINTER:-auto}")"; args=()
     while [[ $# -gt 0 ]]; do
       case "$1" in
-        --painter) [[ $# -ge 2 ]] || usage; painter="$2"; shift 2 ;;
+        --painter) [[ $# -ge 2 ]] || usage; painter="$(norm_painter "$2")"; shift 2 ;;
+        --refs)
+          [[ $# -ge 2 ]] || usage
+          rf="$(ref_files "$2")" || exit 3
+          while IFS= read -r f; do [[ -n "$f" ]] && args+=(--ref "$f"); done <<< "$rf"
+          shift 2 ;;
         *) args+=("$1"); shift ;;
       esac
     done
     case "$painter" in
-      openai|gpt) painter=chatgpt ;;
-      google|gemini|nano-banana|nanobanana) painter=antigravity ;;
+      auto|chatgpt|antigravity|grok) paint "$painter" "$prompt" "$out" ${args[@]+"${args[@]}"} ;;
+      all)
+        stem="${out%.*}"; ext="${out##*.}"; pids=(); labels=()
+        for p in $(connected); do
+          ( paint "$p" "$prompt" "${stem}-${p}.${ext}" ${args[@]+"${args[@]}"} ) &
+          pids+=($!); labels+=("$p")
+        done
+        [[ ${#pids[@]} -gt 0 ]] || { say "no painter is connected. Run: subpowers doctor"; exit 3; }
+        items=(); i=0; ok=0
+        for pid in "${pids[@]}"; do
+          p="${labels[$i]}"; i=$((i+1))
+          if wait "$pid"; then ok=$((ok+1)); items+=("$p=${stem}-${p}.${ext}"); else say "$p did not finish; the others still count"; fi
+        done
+        [[ $ok -gt 0 ]] || exit 1
+        contact_sheet "${stem}-all.jpg" "${items[@]}" >/dev/null
+        if [[ -f "${stem}-all.jpg" ]]; then echo "${stem}-all.jpg"; fi
+        ;;
+      *) say "unknown painter '$painter' (chatgpt, antigravity, grok, all)"; exit 2 ;;
     esac
-    if [[ "$painter" == auto ]]; then
-      if has_chatgpt; then painter=chatgpt
-      elif has_antigravity; then painter=antigravity
-      else
-        echo "subpowers: no painter is connected. Run: subpowers doctor" >&2; exit 3
-      fi
-    fi
-    case "$painter" in
-      chatgpt|antigravity) exec bash "$here/${painter}-image" ${args[@]+"${args[@]}"} ;;
-      *) echo "subpowers: unknown painter '$painter' (chatgpt or antigravity)" >&2; exit 2 ;;
+    ;;
+  sheet)
+    [[ $# -ge 2 ]] || usage
+    name="$1"; out="$2"; shift 2
+    prompt="Character reference sheet of the person in the reference photos, for keeping them consistent across future images. \
+One clean studio sheet on a plain light-gray seamless background, even soft light, the same outfit in every view: \
+full-body front view, full-body left profile, full-body right three-quarter view, full-body back view, \
+and a large head-and-shoulders close-up of the face looking at the camera. Keep the exact face, skin tone, hair and build. \
+Photorealistic, evenly spaced, no text, no labels, no watermark."
+    exec bash "$here/subpowers" image "$prompt" "$out" --refs "$name" --size "${SUBPOWERS_SHEET_SIZE:-1536x1024}" "$@"
+    ;;
+  storyboard)
+    [[ $# -ge 2 ]] || usage
+    shots="$1"; outdir="$2"; shift 2
+    [[ -f "$shots" ]] || { say "shot list not found: $shots (one shot description per line)"; exit 2; }
+    painter="$(norm_painter "${SUBPOWERS_PAINTER:-auto}")"; style=""; size="1536x1024"; refargs=()
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --painter) painter="$(norm_painter "$2")"; shift 2 ;;
+        --style) style="$2"; shift 2 ;;
+        --size) size="$2"; shift 2 ;;
+        --refs) refargs+=(--refs "$2"); shift 2 ;;
+        --ref) refargs+=(--ref "$2"); shift 2 ;;
+        *) say "unknown storyboard option: $1"; exit 2 ;;
+      esac
+    done
+    if [[ "$painter" == all ]]; then say "storyboard uses one painter per board; pick one or leave auto"; exit 2; fi
+    mkdir -p "$outdir"; n=0; pids=(); files=()
+    max="${SUBPOWERS_PARALLEL:-3}"
+    while IFS= read -r line || [[ -n "$line" ]]; do
+      [[ -z "${line// /}" || "$line" == \#* ]] && continue
+      n=$((n+1)); f="$outdir/shot-$(printf '%02d' $n).png"; files+=("Shot $n=$f")
+      ( bash "$here/subpowers" image "Storyboard frame, shot $n. $line. ${style}${style:+. }Cinematic still, no text, no letters." "$f" \
+          --painter "$painter" --size "$size" ${refargs[@]+"${refargs[@]}"} >/dev/null ) &
+      pids+=($!)
+      if [[ ${#pids[@]} -ge $max ]]; then wait "${pids[0]}" || say "a shot failed; continuing"; pids=("${pids[@]:1}"); fi
+    done < "$shots"
+    for pid in ${pids[@]+"${pids[@]}"}; do wait "$pid" || say "a shot failed; continuing"; done
+    [[ $n -gt 0 ]] || { say "the shot list is empty"; exit 2; }
+    have=(); for it in "${files[@]}"; do [[ -f "${it#*=}" ]] && have+=("$it"); done
+    say "${#have[@]} of $n shots painted"
+    contact_sheet "$outdir/storyboard.jpg" ${have[@]+"${have[@]}"} >/dev/null
+    if [[ -f "$outdir/storyboard.jpg" ]]; then echo "$outdir/storyboard.jpg"; else echo "$outdir"; fi
+    ;;
+  refs)
+    sub="${1:-list}"; [[ $# -gt 0 ]] && shift
+    case "$sub" in
+      add)
+        [[ $# -ge 2 ]] || { say "usage: subpowers refs add NAME IMG..."; exit 2; }
+        name="$1"; shift; dir="$HOME_DIR/refs/$name"; mkdir -p "$dir"
+        for img in "$@"; do
+          [[ -f "$img" ]] || { say "missing: $img"; continue; }
+          base="$(basename "$img")"; ext="$(printf '%s' "${base##*.}" | tr '[:upper:]' '[:lower:]')"
+          if [[ "$ext" == heic || "$ext" == heif ]] && command -v sips >/dev/null 2>&1; then
+            sips -s format jpeg "$img" --out "$dir/${base%.*}.jpg" >/dev/null && echo "$dir/${base%.*}.jpg"
+          else cp "$img" "$dir/$base" && echo "$dir/$base"; fi
+        done
+        ;;
+      list)
+        if [[ $# -ge 1 ]]; then ref_files "$1"; else ls -1 "$HOME_DIR/refs" 2>/dev/null || say "no reference sets yet"; fi
+        ;;
+      path) [[ $# -ge 1 ]] || usage; echo "$HOME_DIR/refs/$1" ;;
+      *) say "refs: add | list | path"; exit 2 ;;
     esac
     ;;
   doctor) exec bash "$here/doctor" "$@" ;;
   powers)
-    if has_chatgpt; then echo "image  chatgpt      ON   (codex logged in with ChatGPT)"
-    else echo "image  chatgpt      OFF  (npm install -g @openai/codex, then codex login)"; fi
-    if has_antigravity; then echo "image  antigravity  ON   (agy installed; doctor confirms the login)"
-    else echo "image  antigravity  OFF  (curl -fsSL https://antigravity.google/cli/install.sh | bash, then run agy once)"; fi
+    for p in $ORDER; do
+      if has "$p"; then printf 'image  %-12s ON\n' "$p"; else printf 'image  %-12s OFF  (subpowers doctor shows how to connect it)\n' "$p"; fi
+    done
     ;;
   update)
     root="$(cd "$here/.." && pwd)"
     if [[ -d "$root/.git" ]]; then git -C "$root" pull --ff-only && bash "$root/install.sh" --no-doctor
-    else echo "subpowers: not a git install; re-run the installer from a fresh download" >&2; exit 1; fi
+    else say "not a git install; re-run the installer from a fresh download"; exit 1; fi
     ;;
   help|-h|--help) usage 0 ;;
-  *) echo "subpowers: unknown command '$cmd'" >&2; usage ;;
+  *) say "unknown command '$cmd'"; usage ;;
 esac

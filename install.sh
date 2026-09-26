@@ -9,12 +9,12 @@
 #   1. puts the skill at ~/.claude/skills/subpowers (Claude Code reads it there).
 #      Cloned there already? It stays a git checkout, so `subpowers update` works.
 #   2. links it into ~/.agents/skills and ~/.codex/skills (Codex, Cursor, Gemini CLI, others)
-#   3. puts `subpowers`, `chatgpt-image` and `antigravity-image` on PATH via ~/.local/bin
+#   3. puts `subpowers` and the painters (`chatgpt-image`, `antigravity-image`, `grok-image`) on PATH via ~/.local/bin
 #   4. installs the codex CLI if it is missing and npm or Homebrew is available
 #   5. runs `subpowers doctor`
 #
 # Safe to re-run. Anything it replaces is moved to ~/.claude/backups/, never deleted.
-# It never logs you in: run `codex login` (ChatGPT) and/or `agy` (Antigravity) yourself.
+# It never logs you in: run `codex login` (ChatGPT), `agy` (Antigravity) and/or `grok login` (Grok) yourself.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
@@ -69,10 +69,10 @@ link_into "$root/.codex/skills"
 
 # 3. terminal commands
 mkdir -p "$root/.local/bin"
-for c in subpowers chatgpt-image antigravity-image; do
+for c in subpowers chatgpt-image antigravity-image grok-image; do
   ln -sfn "$target/bin/$c" "$root/.local/bin/$c"
 done
-echo "  linked subpowers, chatgpt-image, antigravity-image into $root/.local/bin"
+echo "  linked subpowers, chatgpt-image, antigravity-image, grok-image into $root/.local/bin"
 case ":$PATH:" in *":$root/.local/bin:"*) ;; *)
   if [[ "$root" == "$HOME" ]]; then echo "  NOTE: add ~/.local/bin to your PATH to type subpowers anywhere (agents do not need this)"; fi ;;
 esac

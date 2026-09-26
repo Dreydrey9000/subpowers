@@ -3,7 +3,7 @@
 <h1 align="center">subpowers</h1>
 
 <p align="center"><b>The AI subscriptions you already pay for, as powers for every agent.</b><br>
-Power #1: your agents make images with your ChatGPT or Google AI plan.<br>
+Power #1: your agents make images with your ChatGPT, Google AI or SuperGrok plan.<br>
 No API key. No per-image bill. A receipt with every image.</p>
 
 <p align="center">For vibe coders · content creators · business owners · innovators<br>
@@ -29,11 +29,14 @@ bash ~/.claude/skills/subpowers/install.sh
 codex login        # ChatGPT painter: choose "Sign in with ChatGPT"
 ```
 
-Using Google instead (or too)? Install the Antigravity CLI and sign in once:
+Using Google or Grok instead (or too)? Install their CLI and sign in once:
 
 ```bash
-curl -fsSL https://antigravity.google/cli/install.sh | bash
+curl -fsSL https://antigravity.google/cli/install.sh | bash   # Google (Antigravity)
 agy                # sign in, then quit
+
+curl -fsSL https://x.ai/cli/install.sh | bash                # xAI (Grok, needs SuperGrok)
+grok login
 ```
 
 Then ask any agent for an image. Or type it:
@@ -61,6 +64,11 @@ Every image below was made by subpowers on a normal subscription, and every capt
 <td><img src="assets/ag-greenhouse.jpg" alt="Isometric greenhouse on a floating rock"><br><sub><b>Antigravity</b> (Nano Banana 2) · 1:1 · 21 s</sub></td>
 <td><img src="assets/ag-podcast-studio.jpg" alt="Isometric podcast studio"><br><sub><b>Antigravity</b> · <code>--size 1080x1350</code> (4:5 for Instagram) · 20 s</sub></td>
 <td><img src="assets/ag-clapper.jpg" alt="Candy-coloured clapperboard on a studio floor"><br><sub><b>Antigravity</b> · 16:9 · 19 s</sub></td>
+</tr>
+<tr>
+<td><img src="assets/grok-fox-before.jpg" alt="A red fox sitting in snow"><br><sub><b>Grok</b> · a fox (the reference)</sub></td>
+<td><img src="assets/grok-fox-after.jpg" alt="The same fox in a red scarf on a rooftop at night"><br><sub><b>Grok</b> · <code>--ref</code> the fox, "red scarf, rooftop at night" · 35 s</sub></td>
+<td><img src="assets/grok-three-painters.jpg" alt="Three robots holding glowing paintbrushes on a stage"><br><sub><b>Grok</b> · 3:2 · 40 s</sub></td>
 </tr>
 </table>
 
@@ -91,7 +99,7 @@ The receipt even tells you when an image was upscaled locally, so nothing gets p
 
 <p align="center"><img src="assets/doctor.png" alt="subpowers doctor output: every check passing" width="90%"></p>
 
-`subpowers doctor` checks both painters, your logins, and where your agents can find the skill, then prints the exact command for anything that's off. `subpowers doctor --smoke` makes one real test image per painter.
+`subpowers doctor` checks every painter, your logins, and where your agents can find the skill, then prints the exact command for anything that's off. `subpowers doctor --smoke` makes one real test image per painter.
 
 ## Always the newest model, without you touching anything
 
@@ -102,17 +110,35 @@ The receipt even tells you when an image was upscaled locally, so nothing gets p
 | The codex CLI | Checked once a day and updated automatically (turn off with `SUBPOWERS_NO_AUTOUPDATE=1`). |
 | The Antigravity helper model | The newest Gemini Flash that `agy models` lists. |
 
-## The two painters
+## The three painters
 
-| | ChatGPT | Antigravity |
-|---|---|---|
-| You need | a ChatGPT plan with Codex access + `codex login` | a Google plan with Antigravity + `agy` signed in |
-| Model | OpenAI's current image model | Nano Banana 2 (Gemini 3.1 Flash Image) |
-| Speed | 60 to 100 s | 17 to 25 s |
-| Shapes | square, 3:2, 2:3 exact; others requested | 1:1, 2:3, 3:2, 3:4, 4:3, 9:16, 16:9 |
-| Reference photos | yes, any number | yes, up to 3 |
+| | ChatGPT | Antigravity | Grok |
+|---|---|---|---|
+| You need | a ChatGPT plan with Codex access + `codex login` | a Google plan with Antigravity + `agy` signed in | SuperGrok + the Grok CLI + `grok login` |
+| Model | OpenAI's current image model | Nano Banana 2 (Gemini 3.1 Flash Image) | Grok Imagine |
+| Speed | 60 to 100 s | 17 to 33 s | 32 to 40 s |
+| Shapes | square, 3:2, 2:3 exact; others requested | 1:1, 2:3, 3:2, 3:4, 4:3, 9:16, 16:9 | 1:1, 16:9, 9:16, 3:2, 2:3 |
+| Reference photos | yes, any number | yes, up to 3 | yes (image edit) |
 
-`subpowers image` uses ChatGPT when it's connected, otherwise Antigravity. Pick one with `--painter antigravity` or set `SUBPOWERS_PAINTER`.
+`subpowers image` uses ChatGPT when it's connected, then Antigravity, then Grok. Pick one with `--painter antigravity|grok` or set `SUBPOWERS_PAINTER`. Every painter runs with API-key auth switched off, so it can only ever use your plan.
+
+**Video is next.** Grok Imagine video (image to video, 6 or 10 s) already works through the Grok CLI on SuperGrok once its video output is set up, and Google's Gemini Omni (video from up to 5 reference photos) is on the [roadmap](ROADMAP.md). ChatGPT has no video door (OpenAI shut Sora down in 2026).
+
+## Beyond one image
+
+```bash
+subpowers image "..." out.png --painter all          # every connected subscription at once + a side-by-side sheet
+subpowers refs add me selfie.heic event.jpg          # save who you are once (or a product, or a world)
+subpowers image "me on a rooftop at golden hour" out.png --refs me
+subpowers sheet me sheet.png --painter all           # character sheet: front, profiles, 3/4, back, face close-up
+subpowers storyboard shots.txt board/ --refs me --style "35mm, deep blue palette"
+```
+
+- **Three versions or one?** `--painter all` gives you one take per subscription in a single sheet, so you pick the winner.
+- **Reference sets** keep the same person (or product) consistent across every image, sheet and storyboard frame.
+- **Storyboards:** write one shot per line (framing, action, setting). Frames paint in parallel and land in `storyboard.jpg` in order, with the same person in every shot.
+- **Cancel a plan, nothing breaks.** A paused subscription just shows OFF in `subpowers powers`, and `auto` moves to the next painter when one fails or runs out of quota.
+- **One rule for real people:** never pass a photo of someone *else* as a setting reference. The painters borrow faces from every reference. Describe the set in words instead.
 
 ## Use it everywhere
 
@@ -123,8 +149,8 @@ The receipt even tells you when an image was upscaled locally, so nothing gets p
 ```markdown
 ## Making images
 To make any image, run:
-  subpowers image "<detailed prompt>" /absolute/path/out.png [--size 1536x1024] [--ref photo.jpg] [--painter antigravity]
-- Uses my own ChatGPT / Google AI subscription. No API key.
+  subpowers image "<detailed prompt>" /absolute/path/out.png [--size 1536x1024] [--ref photo.jpg] [--painter antigravity|grok]
+- Uses my own ChatGPT / Google AI / SuperGrok subscription. No API key.
 - Takes 20 s to 2 min: use a 10-minute command timeout.
 - It prints the saved path. Look at the image before saying it is done.
 - Full instructions: ~/.claude/skills/subpowers/SKILL.md
@@ -136,7 +162,7 @@ Update anytime with `subpowers update`. Uninstall: delete `~/.claude/skills/subp
 
 1. `git clone https://github.com/itsluisc/subpowers ~/.claude/skills/subpowers` (if it already exists, `git -C ~/.claude/skills/subpowers pull` instead).
 2. `bash ~/.claude/skills/subpowers/install.sh`. It links the skill for other agents, puts `subpowers` on PATH, installs the codex CLI if npm or Homebrew is present, and runs the doctor.
-3. Read the doctor's last lines. If no painter is ready, tell your user to run **one** of these themselves (each opens a browser to sign in, which you must not do for them): `codex login` (ChatGPT) or `agy` (Antigravity; install it first with `curl -fsSL https://antigravity.google/cli/install.sh | bash`).
+3. Read the doctor's last lines. If no painter is ready, tell your user to run **one** of these themselves (each opens a browser to sign in, which you must not do for them): `codex login` (ChatGPT), `agy` (Antigravity; install it first with `curl -fsSL https://antigravity.google/cli/install.sh | bash`) or `grok login` (Grok, SuperGrok; install with `curl -fsSL https://x.ai/cli/install.sh | bash`).
 4. After they log in, run `subpowers doctor --smoke` and show them the test image.
 5. From then on, read `~/.claude/skills/subpowers/SKILL.md` before making images.
 
@@ -147,7 +173,7 @@ Never ask the user for an API key, and never put one in. subpowers only uses the
 - Images use your plan's normal usage limits; an image costs more of your allowance than a text message. If you run out, it says so and waits for the reset. It never switches to a paid API.
 - This rides on the official `codex` and `agy` command-line tools, not on a published image API, so providers can change behavior. The doctor and the daily codex update are there for exactly that.
 - Use your own login on your own machine. Don't share credentials or use this to resell access.
-- subpowers is an independent open-source project. ChatGPT and Codex are trademarks of OpenAI; Antigravity, Gemini and Nano Banana are trademarks of Google. Neither company made or endorses this.
+- subpowers is an independent open-source project. ChatGPT and Codex are trademarks of OpenAI; Antigravity, Gemini and Nano Banana are trademarks of Google; Grok and Grok Imagine are trademarks of xAI. None of them made or endorses this.
 
 ## What's next: build it with us
 

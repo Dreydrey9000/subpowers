@@ -106,6 +106,22 @@ else
   fi
 fi
 
+echo "Grok painter (xAI Grok Imagine, your SuperGrok plan)"
+if ! command -v grok >/dev/null 2>&1; then
+  off "Grok CLI not installed -> curl -fsSL https://x.ai/cli/install.sh | bash   then grok login"
+else
+  pass "grok: $(grok --version 2>/dev/null | head -n 1) at $(command -v grok)"
+  gm="$(cd "${TMPDIR:-/tmp}" && env -u XAI_API_KEY -u GROK_CODE_XAI_API_KEY GROK_DISABLE_API_KEY_AUTH=1 grok models 2>&1 || true)"
+  if grep -qi "logged in with grok.com" <<<"$gm"; then
+    gdrv="$(printf '%s\n' "$gm" | sed -nE 's/^[[:space:]]*[-*][[:space:]]+([A-Za-z0-9._-]+).*/\1/p' | grep -vi fast | head -n 1)"
+    pass "logged in with grok.com (helper model: ${gdrv:-grok default}; API-key auth is switched off for every call)"
+    info "painter = xAI's Grok Imagine, chosen by xAI on every call"
+    ready+=(grok)
+  else
+    fail "grok is installed but not logged in with grok.com -> grok login"
+  fi
+fi
+
 echo "Where agents find it"
 for d in "$HOME/.claude/skills/subpowers" "$HOME/.agents/skills/subpowers" "$HOME/.codex/skills/subpowers"; do
   if [[ -f "$d/SKILL.md" ]]; then pass "$d"; else warn "not linked at $d (bash install.sh links it)"; fi

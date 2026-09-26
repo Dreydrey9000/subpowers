@@ -1,0 +1,295 @@
+#!/usr/bin/env bash
+# grok-image: make an image with xAI's Grok Imagine through the Grok CLI
+# (`grok`, Grok Build), paid for by the logged-in grok.com subscription
+# (SuperGrok / SuperGrok Heavy). No API key, no per-image bill.
+# A subpowers painter (https://github.com/itsluisc/subpowers), same contract as
+# bin/chatgpt-image and bin/antigravity-image.
+#
+# HOW IT WORKS (grok 1.0.41, read from the binary and measured 2026-09-26):
+#   painter  the CLI's built-in `image_gen` tool (text to image) or `image_edit`
+#            tool (image to image, used when --ref is given). Both call the
+#            xAI Imagine API through the grok.com session. There is no model
+#            argument: xAI picks the Imagine model server-side
+#            (features.image_gen_model_override empty = remote default).
+#            Evidence on file: every JPEG carries a C2PA manifest signed
+#            "xAI Grok Imagine", org SpaceXAI, trainedAlgorithmicMedia.
+#   driver   a Grok text model relays the prompt to the tool. It runs with ONLY
+#            that one tool enabled (no shell, no file edits, no MCP, no web, no
+#            subagents), so it can do nothing except paint.
+#   auth     API-key auth is disabled for the call (GROK_DISABLE_API_KEY_AUTH=1,
+#            XAI_API_KEY and GROK_CODE_XAI_API_KEY removed), so a stray key in the
+#            environment can never turn a subscription image into a billed one.
+#   output   the tool saves to ~/.grok/sessions/<cwd-slug>/<session>/images/N.jpg
+#            and reports the path in the stream (rawOutput.path). This door reads
+#            that event, never guesses a file.
+#
+# Usage:
+#   grok-image "<prompt>" <out.(jpg|png|webp)> [--size WxH] [--ref IMG]... [--driver MODEL]
+#
+#   --size    requested as the nearest aspect the tool accepts, then resized or
+#             center-cropped locally; the untouched signed JPEG is kept beside it.
+#   --ref     reference image(s) (a person's own photos, a product, a style frame).
+#             Repeatable. Switches the painter to image_edit.
+#   --driver  pin the relay model (default: newest non-"fast" model `grok models` lists).
+#
+# Env: GROK_IMAGE_TIMEOUT (seconds, default 600), GROK_IMAGE_EFFORT (default low).
+#
+# Writes <out>.prompt.txt beside every image. Prints the output path on stdout;
+# provenance on stderr.
+set -euo pipefail
+
+usage() { echo 'usage: grok-image "<prompt>" <out.jpg|png> [--size WxH] [--ref IMG]... [--driver MODEL]' >&2; exit 2; }
+[[ $# -lt 2 ]] && usage
+
+prompt="$1"; out="$2"; shift 2
+size=""; driver=""; refs=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --size)   [[ $# -ge 2 ]] || usage; size="$2"; shift 2 ;;
+    --driver) [[ $# -ge 2 ]] || usage; driver="$2"; shift 2 ;;
+    --ref)    [[ $# -ge 2 ]] || usage; refs+=("$2"); shift 2 ;;
+    -h|--help) usage ;;
+    *) echo "grok-image: unknown arg: $1" >&2; exit 2 ;;
+  esac
+done
+
+[[ -n "$prompt" ]] || { echo "grok-image: empty prompt" >&2; exit 2; }
+if [[ -n "$size" && ! "$size" =~ ^[0-9]+x[0-9]+$ ]]; then
+  echo "grok-image: --size must look like 1024x1024" >&2; exit 2
+fi
+# ${arr[@]+...} keeps empty arrays safe under `set -u` on macOS's bash 3.2.
+for r in ${refs[@]+"${refs[@]}"}; do
+  [[ -f "$r" ]] || { echo "grok-image: missing --ref file: $r" >&2; exit 2; }
+done
+
+command -v grok >/dev/null 2>&1 || {
+  echo "grok-image: grok CLI not found. Install Grok Build (https://x.ai/cli), then run: grok login" >&2; exit 127; }
+
+# Subscription only: API-key auth off for every grok call this door makes.
+genv=(env -u XAI_API_KEY -u GROK_CODE_XAI_API_KEY GROK_DISABLE_API_KEY_AUTH=1)
+
+models_out="$(cd "${TMPDIR:-/tmp}" && "${genv[@]}" grok models 2>&1 || true)"
+if ! printf '%s' "$models_out" | grep -qi "logged in with grok.com"; then
+  echo "grok-image: grok is not logged in with a grok.com account (run: grok login). Refusing to fall back to an API key." >&2
+  exit 3
+fi
+
+# Driver: newest listed model that is not a "fast" (double-rate) variant.
+if [[ -z "$driver" ]]; then
+  driver="$(printf '%s\n' "$models_out" | sed -nE 's/^[[:space:]]*[-*][[:space:]]+([A-Za-z0-9._-]+).*/\1/p' | grep -vi fast | head -n 1 || true)"
+fi
+effort="${GROK_IMAGE_EFFORT:-low}"
+tmo="${GROK_IMAGE_TIMEOUT:-600}"
+
+mkdir -p "$(dirname "$out")" 2>/dev/null || true
+out_dir="$(cd "$(dirname "$out")" 2>/dev/null && pwd)" || {
+  echo "grok-image: cannot create output dir: $(dirname "$out")" >&2; exit 2; }
+out="$out_dir/$(basename "$out")"
+stem="${out%.*}"
+out_ext="$(printf '%s' "${out##*.}" | tr '[:upper:]' '[:lower:]')"
+
+workdir="$(mktemp -d "${TMPDIR:-/tmp}/grok-image.XXXXXX")"
+log="$workdir/stream.ndjson"; err="$workdir/stream.err"
+
+# Nearest aspect the tool accepts. image_gen documents 5; image_edit accepts more.
+aspect="auto"
+if [[ -n "$size" ]]; then
+  if [[ ${#refs[@]} -gt 0 ]]; then cands="1:1 16:9 9:16 4:3 3:4 3:2 2:3 2:1 1:2"; else cands="1:1 16:9 9:16 3:2 2:3"; fi
+  aspect="$(python3 - "$size" $cands <<'PY'
+import math, sys
+w, h = map(int, sys.argv[1].split("x"))
+best = min(sys.argv[2:], key=lambda c: abs(math.log(w / h) - math.log(int(c.split(":")[0]) / int(c.split(":")[1]))))
+print(best)
+PY
+)"
+fi
+
+# References: copied into the workdir (iPhone heic converted), passed as absolute paths.
+ref_list=""; n=0
+for r in ${refs[@]+"${refs[@]}"}; do
+  n=$((n+1))
+  ext="$(printf '%s' "${r##*.}" | tr '[:upper:]' '[:lower:]')"
+  if [[ "$ext" == "heic" || "$ext" == "heif" ]] && command -v sips >/dev/null 2>&1; then
+    local_name="ref${n}.jpg"; sips -s format jpeg "$r" --out "$workdir/$local_name" >/dev/null
+  else
+    local_name="ref${n}.${ext}"; cp "$r" "$workdir/$local_name"
+  fi
+  ref_list="${ref_list:+$ref_list, }\"$workdir/$local_name\""
+done
+
+if [[ $n -eq 0 ]]; then
+  tool="image_gen"
+  args_line="prompt = the text between <<<PROMPT and PROMPT>>> below, character for character; aspect_ratio = \"${aspect}\"."
+else
+  tool="image_edit"
+  args_line="image = [${ref_list}]; prompt = the text between <<<PROMPT and PROMPT>>> below, character for character; aspect_ratio = \"${aspect}\"."
+fi
+
+cat > "$workdir/task.txt" <<EOF
+Call the ${tool} tool exactly once with these arguments:
+${args_line}
+Do not rewrite, shorten, translate or add to the prompt. Do not call any other tool.
+After the tool returns, reply with only the absolute path it returned.
+
+<<<PROMPT
+${prompt}
+PROMPT>>>
+EOF
+
+tcmd=(); command -v timeout >/dev/null 2>&1 && tcmd=(timeout "$tmo")
+margs=(); [[ -n "$driver" ]] && margs=(-m "$driver")
+
+t0=$(date +%s)
+set +e
+( cd "$workdir" && ${tcmd[@]+"${tcmd[@]}"} "${genv[@]}" grok --prompt-file "$workdir/task.txt" \
+    ${margs[@]+"${margs[@]}"} --effort "$effort" \
+    --tools "$tool" --allow "$tool" --disallowed-tools search_tool,use_tool \
+    --no-subagents --disable-web-search --output-format streaming-json --cwd "$workdir" \
+    </dev/null >"$log" 2>"$err" )
+rc=$?
+set -e
+wall=$(( $(date +%s) - t0 ))
+
+# Read what the tool itself reported: the call's input, its status, its saved path.
+meta="$(python3 - "$log" "$tool" <<'PY'
+import json, sys
+path = sys.argv[1]; tool = sys.argv[2]
+calls = {}; saved = ""; status = ""; error = ""; sent_prompt = ""; session = ""; ncalls = 0; texts = []
+for line in open(path, errors="replace"):
+    try: e = json.loads(line)
+    except Exception: continue
+    t = e.get("type")
+    if t == "tool_call" and e.get("toolName") == tool:
+        ncalls += 1
+        calls[e.get("toolCallId")] = e
+        sent_prompt = (e.get("rawInput") or {}).get("prompt", "")
+    elif t == "tool_call_update" and e.get("toolCallId") in calls and e.get("status"):
+        status = e["status"]
+        ro = e.get("rawOutput") or {}
+        if ro.get("path"): saved = ro["path"]
+        if ro.get("message") and status != "completed": error = ro["message"]
+        for c in e.get("content") or []:
+            txt = ((c.get("content") or {}).get("text")) or ""
+            if status != "completed" and txt and not error: error = txt
+    elif t == "end":
+        session = e.get("sessionId", "")
+    elif t == "text":
+        texts.append(str(e.get("data", "")))
+print(json.dumps({"saved": saved, "status": status, "error": error, "sent_prompt": sent_prompt,
+                  "session": session, "calls": ncalls, "reply": "".join(texts)[-400:]}))
+PY
+)"
+field() { python3 -c 'import json,sys;print(json.loads(sys.argv[1])[sys.argv[2]])' "$meta" "$1"; }
+saved="$(field saved)"; status="$(field status)"; terr="$(field error)"; sent="$(field sent_prompt)"
+session="$(field session)"; ncalls="$(field calls)"
+
+if [[ -z "$saved" || ! -f "$saved" ]]; then
+  if [[ -n "$terr" ]]; then
+    echo "grok-image: the ${tool} tool failed: ${terr}" >&2
+    if printf '%s' "$terr" | grep -qi "SuperGrok feature"; then exit 4; fi
+  elif [[ "$ncalls" == "0" ]]; then
+    echo "grok-image: grok finished (exit ${rc}, ${wall}s) but never called ${tool}. Rerun, or reword a prompt that reads like a policy refusal. Reply: $(field reply)" >&2
+  elif [[ $rc -eq 124 ]]; then
+    echo "grok-image: timed out after ${tmo}s" >&2
+  else
+    echo "grok-image: no ${tool} output was found (exit ${rc})." >&2
+  fi
+  tail -n 5 "$err" >&2 || true
+  echo "(stream log: $log)" >&2
+  exit 1
+fi
+
+verbatim="yes"
+[[ "$sent" == "$prompt" ]] || verbatim="NO (the driver changed the prompt; see RELAYED PROMPT)"
+
+dims_of() { sips -g pixelWidth -g pixelHeight "$1" 2>/dev/null | awk '/pixelWidth/{w=$2}/pixelHeight/{h=$2}END{if(w)print w"x"h}'; }
+src_ext="$(printf '%s' "${saved##*.}" | tr '[:upper:]' '[:lower:]')"
+raw_dims="$(dims_of "$saved")"
+original="${stem}.original.${src_ext}"
+notes=""
+
+same_fmt=""
+case "$out_ext:$src_ext" in jpg:jpg|jpeg:jpg|jpg:jpeg|jpeg:jpeg|png:png|webp:webp) same_fmt=1 ;; esac
+
+need_size=""; kept_original=""
+[[ -n "$size" && -n "$raw_dims" && "$raw_dims" != "$size" ]] && need_size=1
+
+if [[ -z "$same_fmt" || -n "$need_size" ]]; then
+  # Keep the untouched, C2PA-signed file; edits below lose the signature.
+  cp "$saved" "$original"; kept_original=1
+fi
+
+work="$workdir/deliver.${src_ext}"
+cp "$saved" "$work"
+if [[ -n "$need_size" ]]; then
+  rw="${raw_dims%x*}"; rh="${raw_dims#*x}"; sw="${size%x*}"; sh="${size#*x}"
+  if (( rw * sh != rh * sw )); then
+    # Center-crop to the requested aspect first.
+    if (( rw * sh > rh * sw )); then cw=$(( rh * sw / sh )); ch=$rh; else cw=$rw; ch=$(( rw * sh / sw )); fi
+    sips --cropToHeightWidth "$ch" "$cw" "$work" >/dev/null
+    notes="center-cropped ${raw_dims} -> ${cw}x${ch}; "
+    echo "grok-image: WARNING aspect: painter returned ${raw_dims} (asked ${aspect}); cropped to match ${size}" >&2
+  fi
+  sips -z "$sh" "$sw" "$work" >/dev/null
+  if (( sw > rw || sh > rh )); then
+    notes="${notes}UPSCALED to ${size} locally (painter max for ${aspect} was ${raw_dims})"
+    echo "grok-image: WARNING upscaled ${raw_dims} -> ${size}; detail is interpolated, not painted" >&2
+  else
+    notes="${notes}resized to ${size} locally"
+  fi
+fi
+
+if [[ -n "$same_fmt" ]]; then
+  cp "$work" "$out"
+else
+  case "$out_ext" in
+    png)  sips -s format png "$work" --out "$out" >/dev/null ;;
+    jpg|jpeg) sips -s format jpeg "$work" --out "$out" >/dev/null ;;
+    *) echo "grok-image: WARNING unsupported output extension .${out_ext}; writing JPEG bytes" >&2; cp "$work" "$out" ;;
+  esac
+  notes="${notes:+$notes; }converted ${src_ext} -> ${out_ext}"
+fi
+[[ -n "$kept_original" ]] && notes="${notes}; signed original kept at ${original}"
+
+dims="$(dims_of "$out")"; bytes="$(wc -c <"$out" | tr -d ' ')"
+
+c2pa="$(python3 - "$saved" <<'PY'
+import sys
+d = open(sys.argv[1], "rb").read()
+if b"c2pa" not in d: print("none"); sys.exit()
+agent = "Grok Imagine" if b"Grok Imagine" in d else "unknown agent"
+org = "SpaceXAI" if b"SpaceXAI" in d else "unknown org"
+signer = "xAI Grok Imagine" if b"xAI Grok Imagine" in d else "unknown signer"
+src = "trainedAlgorithmicMedia" if b"trainedAlgorithmicMedia" in d else "unknown source type"
+print(f"softwareAgent={agent}, org={org}, cert={signer}, {src}")
+PY
+)"
+
+{
+  echo "PROMPT (as given):"
+  echo "$prompt"
+  echo
+  echo "RELAYED PROMPT (the ${tool} tool's own input, from the stream):"
+  echo "$sent"
+  echo
+  echo "provenance:"
+  echo "  door: subpowers/bin/grok-image"
+  echo "  date: $(date '+%Y-%m-%d %H:%M:%S %z')"
+  echo "  grok: $(grok --version 2>/dev/null | head -n 1)"
+  echo "  auth: grok.com session (API-key auth disabled for this call)"
+  echo "  tool: ${tool} (xAI Imagine API, model chosen server-side)"
+  echo "  image model: Grok Imagine | C2PA says: ${c2pa}"
+  echo "  driver model: ${driver:-grok default} (reasoning ${effort})"
+  echo "  prompt relayed verbatim: ${verbatim}"
+  echo "  references: ${n}${refs[0]+ ($(printf '%s ' "${refs[@]}"))}"
+  echo "  requested size: ${size:-model choice} (aspect asked: ${aspect})"
+  echo "  painter size: ${raw_dims:-unknown}"
+  echo "  delivered size: ${dims}${notes:+ (${notes})}"
+  echo "  grok session: ${session} (saved file: ${saved})"
+  echo "  wall time: ${wall}s"
+  echo "  bytes: ${bytes}"
+} > "${stem}.prompt.txt"
+
+echo "grok-image: painted by Grok Imagine (C2PA: ${c2pa}); tool=${tool}; driver=${driver:-default}; refs=${n}; size=${dims}; ${wall}s" >&2
+rm -rf "$workdir" 2>/dev/null || true   # only the temp folder this run created
+echo "$out"
