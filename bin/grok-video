@@ -1,0 +1,182 @@
+#!/usr/bin/env bash
+# grok-video: make a short video with xAI's Grok Imagine through the Grok CLI (`grok`),
+# paid for by the logged-in grok.com subscription (SuperGrok). No API key.
+# A subpowers painter (https://github.com/itsluisc/subpowers), same contract as grok-image.
+#
+# HOW IT WORKS (grok 1.0.41, measured 2026-09-26):
+#   tool     the CLI's `reference_to_video`: video starts from images (a first frame,
+#            reference images, a last frame) or preset voices; there is no text-only video.
+#   output   an MP4 with sound (H.264 + AAC, 480p or 720p, 1 to 15 s) saved under
+#            ~/.grok/sessions/.../videos/N.mp4; this door reads that path from the stream.
+#   privacy  accounts in Zero Data Retention mode (grok's /privacy set to Opt out) get
+#            "video tools are unavailable under ZDR" unless a video storage bucket is set up.
+#
+# Usage:
+#   grok-video "<prompt>" <out.mp4> [--first IMG] [--last IMG] [--ref IMG]... [--voice ID]...
+#              [--duration 1-15] [--aspect 16:9|9:16|1:1|4:3|3:4|3:2|2:3] [--resolution 480p|720p] [--driver MODEL]
+#
+#   --first / --last  pinned as the exact first / last frame (same image both = a loop).
+#   --ref             reference images the clip re-renders (people, products, places).
+#   --voice           a preset voice (e.g. ara, eve, leo, rex); put the spoken line in the prompt.
+# At least one of --first, --last, --ref or --voice is required.
+#
+# Env: GROK_VIDEO_TIMEOUT (seconds, default 900), GROK_IMAGE_EFFORT (helper effort, default high).
+# Writes <out>.prompt.txt beside the video. Prints the output path on stdout.
+set -euo pipefail
+
+sp_cfg="${SUBPOWERS_HOME:-$HOME/.subpowers}/config"
+if [[ -f "$sp_cfg" ]]; then
+  while IFS='=' read -r sp_k sp_v || [[ -n "$sp_k" ]]; do
+    [[ "$sp_k" =~ ^GROK_(IMAGE|VIDEO)_[A-Z_]+$ ]] || continue
+    sp_v="${sp_v%\"}"; sp_v="${sp_v#\"}"
+    [[ -z "${!sp_k+x}" ]] && export "$sp_k=$sp_v"
+  done < "$sp_cfg"
+fi
+
+me="grok-video"
+usage() {
+  echo 'usage: grok-video "<prompt>" <out.mp4> [--first IMG] [--last IMG] [--ref IMG]... [--voice ID]...' >&2
+  echo '                  [--duration 1-15] [--aspect 16:9|9:16|1:1|...] [--resolution 480p|720p] [--driver MODEL]' >&2
+  exit 2
+}
+[[ $# -lt 2 ]] && usage
+prompt="$1"; out="$2"; shift 2
+first=""; last=""; refs=(); voices=(); duration=6; aspect="16:9"; res="720p"; driver=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --first) [[ $# -ge 2 ]] || usage; first="$2"; shift 2 ;;
+    --last) [[ $# -ge 2 ]] || usage; last="$2"; shift 2 ;;
+    --ref) [[ $# -ge 2 ]] || usage; refs+=("$2"); shift 2 ;;
+    --voice) [[ $# -ge 2 ]] || usage; voices+=("$2"); shift 2 ;;
+    --duration) [[ $# -ge 2 ]] || usage; duration="$2"; shift 2 ;;
+    --aspect) [[ $# -ge 2 ]] || usage; aspect="$2"; shift 2 ;;
+    --resolution) [[ $# -ge 2 ]] || usage; res="$2"; shift 2 ;;
+    --driver) [[ $# -ge 2 ]] || usage; driver="$2"; shift 2 ;;
+    -h|--help) usage ;;
+    *) echo "$me: unknown arg: $1" >&2; exit 2 ;;
+  esac
+done
+[[ -n "$prompt" ]] || { echo "$me: empty prompt" >&2; exit 2; }
+[[ "$duration" =~ ^([1-9]|1[0-5])$ ]] || { echo "$me: --duration must be 1 to 15 seconds" >&2; exit 2; }
+[[ "$res" == 480p || "$res" == 720p ]] || { echo "$me: --resolution must be 480p or 720p" >&2; exit 2; }
+[[ -n "$first$last" || ${#refs[@]} -gt 0 || ${#voices[@]} -gt 0 ]] || {
+  echo "$me: video starts from an image: pass --first IMG (or --ref / --last / --voice). subpowers video paints a first frame for you." >&2; exit 2; }
+for f in "$first" "$last" ${refs[@]+"${refs[@]}"}; do
+  [[ -z "$f" || -f "$f" ]] || { echo "$me: missing image: $f" >&2; exit 2; }
+done
+command -v grok >/dev/null 2>&1 || { echo "$me: grok CLI not found. Install Grok Build (https://x.ai/cli), then run: grok login" >&2; exit 127; }
+
+genv=(env -u XAI_API_KEY -u GROK_CODE_XAI_API_KEY GROK_DISABLE_API_KEY_AUTH=1)
+models_out="$(cd "${TMPDIR:-/tmp}" && "${genv[@]}" grok models 2>&1 || true)"
+if ! grep -qi "logged in with grok.com" <<<"$models_out"; then
+  echo "$me: grok is not logged in with a grok.com account (run: grok login). Refusing to fall back to an API key." >&2; exit 3
+fi
+if [[ -z "$driver" ]]; then
+  driver="$(printf '%s\n' "$models_out" | sed -nE 's/^[[:space:]]*[-*][[:space:]]+([A-Za-z0-9._-]+).*/\1/p' | grep -vi fast | head -n 1 || true)"
+fi
+effort="${GROK_IMAGE_EFFORT:-high}"; tmo="${GROK_VIDEO_TIMEOUT:-900}"
+
+mkdir -p "$(dirname "$out")" 2>/dev/null || true
+out="$(cd "$(dirname "$out")" && pwd)/$(basename "$out")"
+workdir="$(mktemp -d "${TMPDIR:-/tmp}/grok-video.XXXXXX")"
+log="$workdir/stream.ndjson"; err="$workdir/stream.err"
+
+# The tool reads the images from disk: copy them in (iPhone HEIC converted).
+stage() {  # stage <src> <name> -> prints the staged absolute path
+  local ext; ext="$(printf '%s' "${1##*.}" | tr '[:upper:]' '[:lower:]')"
+  if [[ "$ext" == heic || "$ext" == heif ]] && command -v sips >/dev/null 2>&1; then
+    sips -s format jpeg "$1" --out "$workdir/$2.jpg" >/dev/null; echo "$workdir/$2.jpg"
+  else cp "$1" "$workdir/$2.$ext"; echo "$workdir/$2.$ext"; fi
+}
+args="prompt = the text between <<<PROMPT and PROMPT>>> below, character for character; aspect_ratio = \"$aspect\"; duration = $duration; resolution_name = \"$res\""
+[[ -n "$first" ]] && args="$args; first_frame = \"$(stage "$first" first)\""
+[[ -n "$last" ]] && args="$args; last_frame = \"$(stage "$last" last)\""
+if [[ ${#refs[@]} -gt 0 ]]; then
+  list=""; i=0; for r in "${refs[@]}"; do i=$((i+1)); list="${list:+$list, }\"$(stage "$r" "ref$i")\""; done
+  args="$args; images = [$list]"
+fi
+if [[ ${#voices[@]} -gt 0 ]]; then
+  list=""; for v in "${voices[@]}"; do list="${list:+$list, }\"$v\""; done; args="$args; voices = [$list]"
+fi
+cat > "$workdir/task.txt" <<EOF
+Call the reference_to_video tool exactly once with these arguments:
+$args.
+Do not rewrite, shorten, translate or add to the prompt. Do not call any other tool.
+After the tool returns, reply with only the path it returned.
+
+<<<PROMPT
+${prompt}
+PROMPT>>>
+EOF
+
+tcmd=()
+if command -v timeout >/dev/null 2>&1; then tcmd=(timeout "$tmo")
+elif command -v perl >/dev/null 2>&1; then tcmd=(perl -e 'alarm shift; exec @ARGV' "$tmo"); fi
+margs=(); [[ -n "$driver" ]] && margs=(-m "$driver")
+t0=$(date +%s)
+set +e
+( cd "$workdir" && ${tcmd[@]+"${tcmd[@]}"} "${genv[@]}" grok --prompt-file "$workdir/task.txt" \
+    ${margs[@]+"${margs[@]}"} --effort "$effort" \
+    --tools reference_to_video --allow reference_to_video --disallowed-tools search_tool,use_tool \
+    --no-subagents --disable-web-search --output-format streaming-json --cwd "$workdir" \
+    </dev/null >"$log" 2>"$err" )
+rc=$?
+set -e
+wall=$(( $(date +%s) - t0 ))
+
+meta="$(python3 - "$log" <<'PY'
+import json, sys
+saved = error = sent = session = ""; calls = 0
+for line in open(sys.argv[1], errors="replace"):
+    try: e = json.loads(line)
+    except Exception: continue
+    t = e.get("type")
+    if t == "tool_call" and e.get("toolName") == "reference_to_video":
+        calls += 1; sent = (e.get("rawInput") or {}).get("prompt", "")
+    elif t == "tool_call_update" and e.get("status"):
+        ro = e.get("rawOutput") or {}
+        if e["status"] == "completed" and ro.get("path"): saved = ro["path"]
+        elif e["status"] != "completed" and ro.get("message"): error = ro["message"]
+    elif t == "end":
+        session = e.get("sessionId", "")
+print(json.dumps({"saved": saved, "error": error, "sent": sent, "session": session, "calls": calls}))
+PY
+)"
+field() { python3 -c 'import json,sys;print(json.loads(sys.argv[1])[sys.argv[2]])' "$meta" "$1"; }
+saved="$(field saved)"; terr="$(field error)"; sent="$(field sent)"; session="$(field session)"
+
+if [[ -z "$saved" || ! -f "$saved" ]]; then
+  if [[ $rc -eq 124 || $rc -eq 142 ]]; then echo "$me: timed out after ${tmo}s" >&2
+  elif [[ -n "$terr" ]]; then
+    echo "$me: reference_to_video failed: $terr" >&2
+    grep -qi "SuperGrok feature" <<<"$terr" && exit 4
+    grep -qi "zero data retention" <<<"$terr" && echo "$me: fix: run grok, type /privacy and choose Opt in, or set up a video storage bucket (https://docs.x.ai/build/settings/zdr-video-storage)" >&2
+  elif [[ "$(field calls)" == "0" ]]; then echo "$me: grok never called reference_to_video (exit $rc)" >&2
+  else echo "$me: no video was saved (exit $rc)" >&2; fi
+  echo "(stream log: $log)" >&2; exit 1
+fi
+
+cp "$saved" "$out" || { echo "$me: painted, but could not write $out (the plan already paid; video is at $saved)" >&2; exit 5; }
+probe="$(ffprobe -v error -show_entries stream=codec_type,codec_name,width,height:format=duration -of compact=p=0 "$out" 2>/dev/null | tr '\n' ' ' || true)"
+verbatim="yes"; [[ "$sent" == "$prompt" ]] || verbatim="NO (the helper changed the prompt)"
+vlist=""; for v in ${voices[@]+"${voices[@]}"}; do vlist="${vlist:+$vlist }$v"; done
+{
+  echo "PROMPT (as given):"; echo "$prompt"; echo
+  echo "provenance:"
+  echo "  door: subpowers/bin/grok-video"
+  echo "  date: $(date '+%Y-%m-%d %H:%M:%S %z')"
+  echo "  grok: $(grok --version 2>/dev/null | head -n 1)"
+  echo "  auth: grok.com session (API-key auth disabled for this call)"
+  echo "  tool: reference_to_video (xAI Grok Imagine video, model chosen server-side)"
+  echo "  driver model: ${driver:-grok default} (reasoning ${effort})"
+  echo "  prompt relayed verbatim: ${verbatim}"
+  echo "  first frame: ${first:-none} | last frame: ${last:-none} | references: ${#refs[@]} | voices: ${vlist:-none}"
+  echo "  asked: ${duration}s ${res} ${aspect}"
+  echo "  delivered: ${probe:-ffprobe unavailable}"
+  echo "  grok session: ${session} (saved file: ${saved})"
+  echo "  wall time: ${wall}s"
+  echo "  bytes: $(wc -c <"$out" | tr -d ' ')"
+} > "${out%.*}.prompt.txt" || exit 5
+echo "$me: painted by Grok Imagine video; driver=${driver:-default} @${effort}; ${duration}s ${res}; ${wall}s" >&2
+rm -rf "$workdir" 2>/dev/null || true
+echo "$out"

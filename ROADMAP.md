@@ -27,7 +27,7 @@ subpowers turns subscriptions people already pay for into powers any agent can u
 
 Probed 2026-09-26, honestly:
 
-- [ ] **Grok Imagine video** (image to video and reference to video, 6 or 10 s, up to 720p, with first/last frame, keyframes and built-in voices) is exposed by the Grok CLI on SuperGrok. Accounts in privacy (zero data retention) mode must give it an S3-compatible output bucket first (`~/.grok/managed_config.toml`, [xAI docs](https://docs.x.ai/build/settings/zdr-video-storage)); after that it is the same painter shape as `grok-image`.
+- [x] **Grok Imagine video**: `subpowers video` (first frame, references, voices, 1 to 15 s, 480p/720p, with sound; paints a first frame when you give none)
 - [ ] **Google Gemini Omni** (video from text plus up to 5 photo references, 10 s) is included in Google AI Plus, Pro and Ultra, but only inside the Gemini app, Flow and Vids. Not reachable from the `agy` CLI yet, so it needs a browser driver.
 - [ ] ChatGPT: no video door (OpenAI shut Sora down in 2026).
 - [ ] A daily probe that turns on a native CLI lane the day `generate_video` appears in `codex` or `agy`.
