@@ -86,7 +86,7 @@ if [[ -n "$OPS" ]]; then check "png 1024x1024" img "$C/out/mug.png" png 1024x102
 else check "png at the painter's 1254x1254" img "$C/out/mug.png" png 1254x1254; fi
 check "receipt" test -f "$C/out/mug.prompt.txt"
 check "one paint" paints 1 codex
-check "receipt carries token usage" has "$C/out/mug.prompt.txt" "tokens: input=25000 output=120"
+check "receipt carries token usage" has "$C/out/mug.prompt.txt" "tokens: input=25000 output=120$"
 
 newcase "chatgpt: a helper that burns 200k input tokens is flagged"
 run STUB_CODEX_INPUT_TOKENS=200000 bash "$bin/chatgpt-image" "a red mug" "$C/out/mug.png"

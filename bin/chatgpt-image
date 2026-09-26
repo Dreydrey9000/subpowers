@@ -227,7 +227,8 @@ if [[ -z "$ok" ]]; then
   exit 1
 fi
 
-# Pull what the image tool itself reported: savedPath, revisedPrompt, alpha.
+# Pull what the image tool itself reported: savedPath, revisedPrompt, alpha, and
+# the session's token usage (the last token_count event carries the total).
 # `codex exec --json` stdout does NOT carry the image_gen result item (checked
 # 2026-09-23); the session rollout file does. Find it by thread id, else by
 # the unique workdir path.
@@ -237,10 +238,13 @@ rollout=""
 [[ -z "$rollout" ]] && rollout="$(grep -l -F "$workdir" $(ls -t "${CODEX_HOME:-$HOME/.codex}"/sessions/*/*/*/*.jsonl 2>/dev/null | head -n 20) 2>/dev/null | head -n 1 || true)"
 meta="$(python3 - "${rollout:-$log}" <<'PY'
 import json, sys
-saved = revised = alpha = ""; calls = 0
+saved = revised = alpha = ""; calls = 0; usage = {}
 for line in open(sys.argv[1], errors="replace"):
     try: ev = json.loads(line)
     except Exception: continue
+    p = ev.get("payload") if isinstance(ev, dict) else None
+    if isinstance(p, dict) and p.get("type") == "token_count":
+        usage = (p.get("info") or {}).get("total_token_usage") or usage
     stack = [ev]
     while stack:
         o = stack.pop()
@@ -257,11 +261,12 @@ for line in open(sys.argv[1], errors="replace"):
             stack.extend(o.values())
         elif isinstance(o, list):
             stack.extend(o)
-print(json.dumps({"saved": saved, "revised": revised, "alpha": alpha, "calls": calls}))
+print(json.dumps({"saved": saved, "revised": revised, "alpha": alpha, "calls": calls,
+                  "tin": usage.get("input_tokens", ""), "tout": usage.get("output_tokens", "")}))
 PY
 )"
 field() { python3 -c 'import json,sys;print(json.loads(sys.argv[1])[sys.argv[2]])' "$meta" "$1"; }
-saved="$(field saved)"; revised="$(field revised)"; alpha="$(field alpha)"
+saved="$(field saved)"; revised="$(field revised)"; alpha="$(field alpha)"; tin="$(field tin)"; tout="$(field tout)"
 
 # Prefer the image tool's own file (untouched, carries OpenAI's C2PA
 # signature) over whatever the driver copied into the workdir.
@@ -282,6 +287,11 @@ delivery_failed() { local rc=$?; (( rc == 0 )) && return 0; echo "$me: painted b
 trap delivery_failed EXIT
 if [[ -z "$saved" ]]; then
   echo "chatgpt-image: WARNING no image_gen result event in the log; this PNG may not come from the image model." >&2
+fi
+# One image_gen call costs 25k to 70k input tokens (measured 2026-09-26); far more
+# means the helper ran start-up routines or shell turns before painting.
+if [[ -n "$tin" ]] && (( tin > 150000 )); then
+  echo "chatgpt-image: WARNING this image used ${tin} input tokens: the helper did more than paint: check AGENTS.md and the shell flags" >&2
 fi
 
 dims_of() { python3 "$here/imgops" dims "$1" 2>/dev/null || true; }
@@ -353,6 +363,7 @@ painter="OpenAI's current ChatGPT image model, chosen server-side (last confirme
   echo "  codex rollout: ${rollout:-<not found>}"
   echo "  transparent_background reported: ${alpha:-n/a}"
   echo "  image_gen saved_path: ${saved:-<not reported>}"
+  if [[ -n "$tin" ]]; then echo "  tokens: input=${tin} output=${tout}"; else echo "  tokens: not in the session record"; fi
   echo "  bytes: ${bytes}"
 } > "${stem}.prompt.txt" || exit 5   # bash 3.2 does not stop on a failed redirect of a { } group
 
