@@ -253,6 +253,16 @@ run bash "$bin/doctor"
 check "pong call pinned to the configured helper" called 'Reply with exactly: pong' '"-m", "gpt-test-sol"'
 check "reports the configured ChatGPT helper" has "$C/stdout" "gpt-test-sol"
 check "reports the configured antigravity helper" has "$C/stdout" "helper model: gemini-[0-9.]+-flash-low"
+newcase "doctor: a dry first helper falls through, like the painter"
+mkdir -p "$C/home/.subpowers"
+printf 'CHATGPT_IMAGE_DRIVERS=gpt-test-sol:default\n' >"$C/home/.subpowers/config"
+run STUB_CODEX_DRY_MODEL=gpt-test-sol bash "$bin/doctor"
+check "live check PASS on the next helper" has "$C/stdout" "PASS +live check"
+newcase "chatgpt: a dry first helper falls through to the next, one paint"
+run STUB_CODEX_DRY_MODEL=gpt-test-sol CHATGPT_IMAGE_DRIVERS=gpt-test-sol:default bash "$bin/chatgpt-image" "a red mug" "$C/out/mug.png"
+check "exit 0" exits 0
+check "one paint" paints 1 codex
+check "receipt names the helper that painted" has "$C/out/mug.prompt.txt" "driver model: default"
 newcase "doctor: a spent quota is not a login problem"
 run STUB_CODEX_LIVE_ERROR="You've hit your usage limit. Try again in 3 hours." bash "$bin/doctor"
 check "names the quota" has "$C/stdout" "FAIL .*(quota|usage limit)"

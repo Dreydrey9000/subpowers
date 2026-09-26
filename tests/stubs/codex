@@ -48,6 +48,11 @@ elif a[:1] == ["exec"]:
     tid = str(uuid.uuid4())
     print(json.dumps({"type": "thread.started", "thread_id": tid}))
     print(json.dumps({"type": "turn.started"}))
+    if _stub.arg("-m") and _stub.arg("-m") == os.environ.get("STUB_CODEX_DRY_MODEL"):
+        err = "You've hit your usage limit for " + _stub.arg("-m") + ". Try again in 3 hours."
+        print(json.dumps({"type": "error", "message": err}))
+        print(json.dumps({"type": "turn.failed", "error": {"message": err}}))
+        sys.exit(1)
     if "Reply with exactly: pong" in prompt:
         err = os.environ.get("STUB_CODEX_LIVE_ERROR")
         if err:
