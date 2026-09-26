@@ -25,6 +25,7 @@ subpowers doctor --smoke
 ```bash
 for f in bin/subpowers bin/chatgpt-image bin/antigravity-image bin/doctor bin/update-codex install.sh; do /bin/bash -n "$f"; done
 python3 -m py_compile bin/resolve-drivers
+bash tests/run.sh   # every painter end to end against stub CLIs; paints nothing, spends no quota
 bash install.sh --dest /tmp/subpowers-test --no-doctor   # installer dry run
 subpowers doctor
 ```
@@ -38,7 +39,7 @@ A painter is `bin/<name>-image` with the same contract as `bin/chatgpt-image`:
 - `"<prompt>" <out> [--size WxH] [--ref IMG]...`
 - output path on stdout, progress and warnings on stderr, a `<out>.prompt.txt` receipt
 - it calls the provider CLI's own built-in image tool (never a script that fakes an image, never an API key)
-- exit codes: 2 usage, 3 not logged in, 127 CLI missing, 1 anything else
+- exit codes: 2 usage, 3 not logged in, 5 painted but not delivered (the front door never paints again), 127 CLI missing, 1 anything else
 
 Then add it to `bin/subpowers`, `bin/doctor`, the README painter table and `SKILL.md`.
 

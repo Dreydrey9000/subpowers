@@ -7,6 +7,18 @@
 # Exit 0 when at least one painter is ready.
 set -uo pipefail
 
+# Per-user defaults: KEY=value lines in ~/.subpowers/config ($SUBPOWERS_HOME/config),
+# e.g. CHATGPT_IMAGE_DRIVERS=gpt-6-sol to keep a frontier model's quota free.
+# Only painter keys are read; a variable already set in the environment wins.
+sp_cfg="${SUBPOWERS_HOME:-$HOME/.subpowers}/config"
+if [[ -f "$sp_cfg" ]]; then
+  while IFS='=' read -r sp_k sp_v || [[ -n "$sp_k" ]]; do
+    [[ "$sp_k" =~ ^(CHATGPT|AGY|GROK)_IMAGE_[A-Z_]+$ ]] || continue
+    sp_v="${sp_v%\"}"; sp_v="${sp_v#\"}"
+    [[ -z "${!sp_k+x}" ]] && export "$sp_k=$sp_v"
+  done < "$sp_cfg"
+fi
+
 src="${BASH_SOURCE[0]}"
 while [[ -L "$src" ]]; do
   d="$(cd "$(dirname "$src")" && pwd)"; src="$(readlink "$src")"
@@ -34,8 +46,11 @@ ready=()
 echo "subpowers doctor ($skill)"
 if command -v python3 >/dev/null 2>&1; then pass "python3: $(python3 --version 2>&1)"
 else fail "python3 missing -> xcode-select --install (macOS) or install Python 3"; fi
-if command -v sips >/dev/null 2>&1; then pass "sips present (exact sizes and png conversion work)"
-else warn "sips missing (not macOS): exact --size is not enforced; ask for .jpg from the antigravity painter"; fi
+ops="$(python3 "$here/imgops" backend 2>/dev/null)"
+if [[ "$ops" == pillow || "$ops" == sips ]]; then pass "image ops: $ops (exact --size and format conversion work)"
+else warn "no image ops (no Pillow, no sips): images arrive in the painter's own format and size -> python3 -m pip install --user pillow"; fi
+if python3 -c 'import PIL' >/dev/null 2>&1; then pass "Pillow $(python3 -c 'import PIL; print(PIL.__version__)' 2>/dev/null) (council side-by-side sheet, slideshow, grok reference padding)"
+else warn "Pillow missing: painting works, but the council side-by-side sheet, slideshow and grok reference padding need it -> python3 -m pip install --user pillow"; fi
 
 echo "ChatGPT painter (OpenAI image model, your ChatGPT plan)"
 if ! command -v codex >/dev/null 2>&1; then
@@ -51,18 +66,36 @@ else
     1) warn "$msg  (subpowers doctor --fix runs it; the painter also does it once a day)" ;;
     *) warn "$msg" ;;
   esac
-  if codex login status 2>&1 | grep -qi "chatgpt"; then
+  chain="${CHATGPT_IMAGE_DRIVERS:-${GPT_IMAGE_MODELS:-$(python3 "$here/resolve-drivers" 2>/dev/null || echo default)}}"
+  # Captured before grep: under pipefail a CLI killed by SIGPIPE reads as a failed check.
+  login_out="$(codex login status 2>&1)"
+  if grep -qi "chatgpt" <<<"$login_out"; then
     pass "login stored: ChatGPT (your plan pays; no API key)"
-    # A stored login is not a working login: ask OpenAI one tiny question, the
-    # same way the painter does, and only PASS on a real answer.
+    # A stored login is not a working login: ask OpenAI one tiny question the way
+    # chatgpt-image asks (its isolation flags, its first helper model) and only
+    # PASS on a real answer. Otherwise a user config.toml or AGENTS.md can make
+    # this check pass or cost what the painter never would.
+    iso=(); cenv=(env -u OPENAI_API_KEY -u OPENAI_BASE_URL -u CODEX_API_KEY)
+    if [[ -z "${SUBPOWERS_CODEX_KEEP_CONFIG:-}" ]]; then
+      iso=(-c 'model_provider="openai"' -c 'openai_base_url="https://chatgpt.com/backend-api/codex"' -c 'mcp_servers={}'
+           -c 'project_doc_max_bytes=0' -c 'features.shell_tool=false')
+      exec_help="$(codex exec --help 2>/dev/null)"
+      grep -q -- '--ignore-user-config' <<<"$exec_help" && iso+=(--ignore-user-config)
+    else
+      cenv=()
+    fi
     ldir="$(mktemp -d "${TMPDIR:-/tmp}/subpowers-live.XXXXXX")"
-    live="$(cd "$ldir" && perl -e 'alarm shift; exec @ARGV' "${SUBPOWERS_LIVE_TIMEOUT:-120}" \
-      env -u OPENAI_API_KEY -u OPENAI_BASE_URL -u CODEX_API_KEY codex exec \
-      -c 'model_provider="openai"' -c 'openai_base_url="https://chatgpt.com/backend-api/codex"' \
-      -c 'mcp_servers={}' -c 'model_reasoning_effort="low"' --json --skip-git-repo-check \
-      "Reply with exactly: pong" </dev/null 2>/dev/null || true)"
+    for m in ${chain//:/ }; do
+      margs=(-c 'model_reasoning_effort="low"'); [[ "$m" != default ]] && margs+=(-m "$m")
+      live="$(cd "$ldir" && perl -e 'alarm shift; exec @ARGV' "${SUBPOWERS_LIVE_TIMEOUT:-120}" \
+        ${cenv[@]+"${cenv[@]}"} codex exec ${iso[@]+"${iso[@]}"} "${margs[@]}" --json --skip-git-repo-check \
+        "Reply with exactly: pong" </dev/null 2>/dev/null || true)"
+      # Like chatgpt-image: the next helper only when this one is dry or unavailable.
+      grep -q '"turn.completed"' <<<"$live" && break
+      grep -qiE 'usage limit|usage_limit|rate_limit|quota|model_not_found|does not exist|not supported|unsupported model|not available|newer version' <<<"$live" || break
+    done
     if grep -q '"turn.completed"' <<<"$live"; then
-      pass "live check: ChatGPT answered a real request"
+      pass "live check: ChatGPT answered a real request (helper: $m)"
     else
       why="$(printf '%s\n' "$live" | python3 -c '
 import json, re, sys
@@ -74,16 +107,26 @@ for line in sys.stdin:
     elif e.get("type") == "error" and not msg: msg = e.get("message", "")
 msg = re.sub(r"sk-[A-Za-z0-9*_-]{4,}", "sk-***", msg)
 print((msg or "no answer before the timeout").split(", url:")[0][:160])' 2>/dev/null)"
-      fail "live check: OpenAI rejected a real request (${why}) -> codex logout && codex login"
+      case "$(tr '[:upper:]' '[:lower:]' <<<"$why")" in
+        *"usage limit"*|*quota*|*"rate limit"*|*rate_limit*|*429*|*"too many requests"*)
+          fail "live check: the ChatGPT plan's usage is spent or rate limited (${why}) -> it resets on its own; meanwhile use another painter" ;;
+        *401*|*403*|*unauthori*|*forbidden*|*expired*|*token*|*login*|*"log in"*|*"sign in"*)
+          fail "live check: OpenAI rejected the login (${why}) -> codex logout && codex login" ;;
+        *"error sending request"*|*network*|*connect*|*dns*|*resolve*|*"timed out"*|*"no answer"*|*disconnected*)
+          fail "live check: could not reach OpenAI, a network problem (${why}) -> check the connection or proxy, then run subpowers doctor again" ;;
+        *)
+          fail "live check: OpenAI rejected a real request (${why}) -> run subpowers doctor again; if it repeats, codex logout && codex login" ;;
+      esac
       cg_ok=""
     fi
   else
     fail "not logged in with ChatGPT -> codex login   (choose Sign in with ChatGPT)"; cg_ok=""
   fi
-  if codex features list 2>/dev/null | awk '$1=="image_generation"{print $NF}' | grep -q true; then pass "image_generation feature is on"
+  feats="$(codex features list 2>/dev/null)"
+  if awk '$1=="image_generation" && $NF=="true"{on=1} END{exit !on}' <<<"$feats"; then pass "image_generation feature is on"
   else fail "image_generation feature is off -> codex features enable image_generation"; cg_ok=""; fi
-  chain="$(python3 "$here/resolve-drivers" 2>/dev/null)"
-  if [[ "$chain" == "default" ]]; then warn "no codex model list yet (it appears after the first codex run); using codex's default"
+  if [[ -n "${CHATGPT_IMAGE_DRIVERS:-${GPT_IMAGE_MODELS:-}}" ]]; then pass "helper models, your choice (CHATGPT_IMAGE_DRIVERS): ${chain//:/ > }"
+  elif [[ "$chain" == "default" ]]; then warn "no codex model list yet (it appears after the first codex run); using codex's default"
   else pass "helper models, newest first: ${chain//:/ > }"; fi
   info "painter = OpenAI's current image model, chosen by OpenAI on every call"
   [[ -n "$cg_ok" ]] && ready+=(chatgpt)
@@ -97,8 +140,19 @@ else
   pass "agy: $("$AGY" --version 2>/dev/null | head -n 1) at $AGY"
   models="$("$AGY" models 2>&1 || true)"
   if grep -qE '^gemini-[0-9]' <<<"$models"; then
-    newest="$(printf '%s\n' "$models" | grep -oE '^gemini-[0-9][0-9.]*-flash-low' | sort -t- -k2,2Vr | head -n 1)"
-    pass "logged in (helper model: ${newest:-agy default})"
+    # The helper antigravity-image will pick: newest gemini-X-flash at AGY_IMAGE_EFFORT.
+    effort="${AGY_IMAGE_EFFORT:-high}"
+    if [[ -n "${AGY_IMAGE_DRIVERS:-}" ]]; then helper="${AGY_IMAGE_DRIVERS%%:*}"
+    else helper="$(python3 -c '
+import re, sys
+effort, found = sys.argv[1], {}
+for line in sys.stdin:
+    m = re.match(r"(gemini-(\d+(?:\.\d+)*)-flash-(low|medium|high))\s", line)
+    if m: found.setdefault(tuple(int(x) for x in m.group(2).split(".")), {})[m.group(3)] = m.group(1)
+if found:
+    v = found[max(found)]; print(v.get(effort) or v.get("high") or next(iter(v.values())))
+' "$effort" <<<"$models" 2>/dev/null)"; fi
+    pass "logged in (helper model: ${helper:-agy default}, effort ${effort})"
     info "painter = Google's image model, chosen by Google on every call (Nano Banana 2 as of 2026-09)"
     ready+=(antigravity)
   else

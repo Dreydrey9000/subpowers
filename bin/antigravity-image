@@ -51,7 +51,8 @@
 #
 # Writes <out>.prompt.txt (your prompt + the prompt the tool received + provenance)
 # beside every image. Prints the output path on stdout; provenance on stderr.
-# Exit codes: 2 usage, 3 not logged in, 75 lease busy, 127 agy missing, 1 other.
+# Exit codes: 2 usage, 3 not logged in, 5 painted but not delivered, 75 lease busy,
+# 127 agy missing, 1 other.
 set -euo pipefail
 
 # Per-user defaults: KEY=value lines in ~/.subpowers/config ($SUBPOWERS_HOME/config),
@@ -192,8 +193,8 @@ ref_list=""; n=0
 for r in ${refs[@]+"${refs[@]}"}; do
   n=$((n+1))
   ext="$(printf '%s' "${r##*.}" | tr '[:upper:]' '[:lower:]')"
-  if [[ "$ext" == "heic" || "$ext" == "heif" ]] && command -v sips >/dev/null 2>&1; then
-    local_name="ref${n}.jpg"; sips -s format jpeg "$r" --out "$work/$local_name" >/dev/null
+  if [[ "$ext" == "heic" || "$ext" == "heif" ]] && python3 "$here/imgops" convert "$r" "$work/ref${n}.jpg" 2>/dev/null; then
+    local_name="ref${n}.jpg"
   else
     local_name="ref${n}.${ext}"; cp "$r" "$work/$local_name"
   fi
@@ -324,6 +325,10 @@ if [[ -z "$img" || ! -f "$img" ]]; then
   tail -n 10 "$log" >&2; echo "(workdir kept: $root)" >&2
   exit 1
 fi
+# The plan has paid for this image: any failure from here on is a delivery failure,
+# exit 5, so bin/subpowers never paints it again on another plan.
+delivery_failed() { local rc=$?; (( rc == 0 )) && return 0; echo "$me: painted but not delivered (exit $rc); the painted file: $img" >&2; exit 5; }
+trap delivery_failed EXIT
 if [[ "$calls" == "0" ]]; then
   echo "$me: WARNING no generate_image call in the transcript; this file may not come from the image model." >&2
 elif [[ "$calls" != "1" ]]; then
@@ -333,28 +338,32 @@ if (( n > 0 )) && [[ -z "$passed_refs" ]]; then
   echo "$me: WARNING ${n} reference(s) given but the tool call carried no ImagePaths." >&2
 fi
 
-dims_of() { sips -g pixelWidth -g pixelHeight "$1" 2>/dev/null | awk '/pixelWidth/{w=$2}/pixelHeight/{h=$2}END{if(w)print w"x"h}'; }
+dims_of() { python3 "$here/imgops" dims "$1" 2>/dev/null || true; }
 src_ext="$(printf '%s' "${img##*.}" | tr '[:upper:]' '[:lower:]')"
 [[ "$src_ext" == "jpeg" ]] && src_ext="jpg"
 raw_dims="$(dims_of "$img")"
 
 # Deliver: same format = byte-for-byte copy; otherwise convert and keep the
 # signed original beside it (the C2PA manifest lives only in the original).
-# sips writes JPEG at "normal" quality unless told otherwise; ask for best.
-jq=(); [[ "$out_ext" == "jpg" || "$out_ext" == "jpeg" ]] && jq=(-s formatOptions best)
-original=""
+# With no image ops here (no Pillow, no sips) the plan has already paid, so the
+# painter's own file is delivered untouched under its real extension.
+original=""; noops=""
 if [[ "$out_ext" == "jpeg" ]]; then want="jpg"; else want="$out_ext"; fi
-if [[ "$want" == "$src_ext" ]]; then
+if ! python3 "$here/imgops" backend >/dev/null 2>&1; then
+  noops="the painter's own ${src_ext}, untouched: no image ops here (no Pillow, no sips), so no conversion or resize; fix: python3 -m pip install --user pillow"
+  [[ "$want" == "$src_ext" ]] || out="${stem}.${src_ext}"
+  cp "$img" "$out"
+  echo "$me: WARNING delivered ${noops}" >&2
+elif [[ "$want" == "$src_ext" ]]; then
   cp "$img" "$out"
 else
   original="${stem}.original.${src_ext}"
   cp "$img" "$original"
-  fmt="$want"; [[ "$fmt" == "jpg" ]] && fmt="jpeg"
-  sips -s format "$fmt" ${jq[@]+"${jq[@]}"} "$img" --out "$out" >/dev/null
+  python3 "$here/imgops" convert "$img" "$out"
 fi
 
 resized=""
-if [[ -n "$size" && -n "$raw_dims" && "$raw_dims" != "$size" ]]; then
+if [[ -z "$noops" && -n "$size" && -n "$raw_dims" && "$raw_dims" != "$size" ]]; then
   plan="$(python3 - "$raw_dims" "$size" <<'PY'
 import math, sys
 rw, rh = (int(x) for x in sys.argv[1].split("x")); sw, sh = (int(x) for x in sys.argv[2].split("x"))
@@ -369,8 +378,8 @@ PY
   if [[ "$plan" == do* ]]; then
     read -r _ ch cw dir trim <<<"$plan"
     if [[ -z "$original" ]]; then original="${stem}.original.${src_ext}"; cp "$img" "$original"; fi
-    [[ "${ch}x${cw}" != "${raw_dims#*x}x${raw_dims%x*}" ]] && sips ${jq[@]+"${jq[@]}"} -c "$ch" "$cw" "$out" >/dev/null
-    sips ${jq[@]+"${jq[@]}"} -z "${size#*x}" "${size%x*}" "$out" >/dev/null
+    [[ "${cw}x${ch}" != "$raw_dims" ]] && python3 "$here/imgops" crop "$out" "$cw" "$ch"
+    python3 "$here/imgops" resize "$out" "${size%x*}" "${size#*x}"
     resized="center-cropped to ${cw}x${ch} (trimmed ${trim}% of the frame) and resized locally from ${raw_dims}"
     [[ "$dir" == "up" ]] && resized="${resized} (LOCAL UPSCALE: the painter's native size is ${raw_dims})"
     resized="${resized}; signed original kept at ${original}"
@@ -431,10 +440,11 @@ fi
   echo "  requested size: ${size:-model choice}"
   echo "  painter size: ${raw_dims:-unknown} (${src_ext})"
   echo "  delivered size: ${dims}${resized:+ (${resized})}"
+  [[ -n "$noops" ]] && echo "  delivered as: ${noops}"
   [[ -n "$original" ]] && echo "  signed original: ${original}"
   echo "  agy conversation: ${cid}"
   echo "  bytes: ${bytes}"
-} > "${stem}.prompt.txt"
+} > "${stem}.prompt.txt" || exit 5   # bash 3.2 does not stop on a failed redirect of a { } group
 
 echo "$me: painted by ${painter_ids:-server-chosen model}; driver=${used}; refs=${n}; ${dims}; ${wall}s" >&2
 if [[ -z "${AGY_IMAGE_KEEP_WORKDIR:-}" ]]; then

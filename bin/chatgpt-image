@@ -61,6 +61,7 @@ while [[ -L "$src" ]]; do
   [[ "$src" != /* ]] && src="$d/$src"
 done
 here="$(cd "$(dirname "$src")" && pwd)"
+me="chatgpt-image"
 
 usage() { echo 'usage: chatgpt-image "<prompt>" <out.png> [--size WxH] [--ref IMG]... [--driver MODEL]' >&2; exit 2; }
 [[ $# -lt 2 ]] && usage
@@ -87,7 +88,10 @@ done
 
 command -v codex >/dev/null 2>&1 || {
   echo "chatgpt-image: codex CLI not found. npm install -g @openai/codex (or brew install codex), then codex login" >&2; exit 127; }
-if ! codex login status 2>&1 | grep -qi "chatgpt"; then
+# Output is captured before grep: under pipefail, `cli | grep -q` fails when grep exits
+# early and the CLI dies of SIGPIPE, which reads a logged-in plan as logged out.
+login_out="$(codex login status 2>&1)" || true
+if ! grep -qi "chatgpt" <<<"$login_out"; then
   echo "chatgpt-image: codex is not logged in with ChatGPT (run: codex login). Refusing to fall back to an API key." >&2
   exit 3
 fi
@@ -118,10 +122,9 @@ img_args=(); ref_list=""; n=0
 for r in ${refs[@]+"${refs[@]}"}; do
   n=$((n+1))
   ext="$(printf '%s' "${r##*.}" | tr '[:upper:]' '[:lower:]')"
-  if [[ "$ext" == "heic" || "$ext" == "heif" ]] && command -v sips >/dev/null 2>&1; then
-    # iPhone photos: the image tool wants png/jpg/webp.
+  # iPhone photos: the image tool wants png/jpg/webp.
+  if [[ "$ext" == "heic" || "$ext" == "heif" ]] && python3 "$here/imgops" convert "$r" "$workdir/ref${n}.jpg" 2>/dev/null; then
     local_name="ref${n}.jpg"
-    sips -s format jpeg "$r" --out "$workdir/$local_name" >/dev/null
   else
     local_name="ref${n}.${ext}"
     cp "$r" "$workdir/$local_name"
@@ -180,7 +183,8 @@ iso=(); cenv=(env -u OPENAI_API_KEY -u OPENAI_BASE_URL -u CODEX_API_KEY)
 if [[ -z "${SUBPOWERS_CODEX_KEEP_CONFIG:-}" ]]; then
   iso=(-c 'model_provider="openai"' -c 'openai_base_url="https://chatgpt.com/backend-api/codex"' -c 'mcp_servers={}'
        -c 'project_doc_max_bytes=0' -c 'features.shell_tool=false')
-  codex exec --help 2>/dev/null | grep -q -- '--ignore-user-config' && iso+=(--ignore-user-config)
+  exec_help="$(codex exec --help 2>/dev/null)" || true
+  grep -q -- '--ignore-user-config' <<<"$exec_help" && iso+=(--ignore-user-config)
 else
   cenv=()
 fi
@@ -223,7 +227,8 @@ if [[ -z "$ok" ]]; then
   exit 1
 fi
 
-# Pull what the image tool itself reported: savedPath, revisedPrompt, alpha.
+# Pull what the image tool itself reported: savedPath, revisedPrompt, alpha, and
+# the session's token usage (the last token_count event carries the total).
 # `codex exec --json` stdout does NOT carry the image_gen result item (checked
 # 2026-09-23); the session rollout file does. Find it by thread id, else by
 # the unique workdir path.
@@ -233,10 +238,13 @@ rollout=""
 [[ -z "$rollout" ]] && rollout="$(grep -l -F "$workdir" $(ls -t "${CODEX_HOME:-$HOME/.codex}"/sessions/*/*/*/*.jsonl 2>/dev/null | head -n 20) 2>/dev/null | head -n 1 || true)"
 meta="$(python3 - "${rollout:-$log}" <<'PY'
 import json, sys
-saved = revised = alpha = ""; calls = 0
+saved = revised = alpha = ""; calls = 0; usage = {}
 for line in open(sys.argv[1], errors="replace"):
     try: ev = json.loads(line)
     except Exception: continue
+    p = ev.get("payload") if isinstance(ev, dict) else None
+    if isinstance(p, dict) and p.get("type") == "token_count":
+        usage = (p.get("info") or {}).get("total_token_usage") or usage
     stack = [ev]
     while stack:
         o = stack.pop()
@@ -253,11 +261,12 @@ for line in open(sys.argv[1], errors="replace"):
             stack.extend(o.values())
         elif isinstance(o, list):
             stack.extend(o)
-print(json.dumps({"saved": saved, "revised": revised, "alpha": alpha, "calls": calls}))
+print(json.dumps({"saved": saved, "revised": revised, "alpha": alpha, "calls": calls,
+                  "tin": usage.get("input_tokens", ""), "tout": usage.get("output_tokens", "")}))
 PY
 )"
 field() { python3 -c 'import json,sys;print(json.loads(sys.argv[1])[sys.argv[2]])' "$meta" "$1"; }
-saved="$(field saved)"; revised="$(field revised)"; alpha="$(field alpha)"
+saved="$(field saved)"; revised="$(field revised)"; alpha="$(field alpha)"; tin="$(field tin)"; tout="$(field tout)"
 
 # Prefer the image tool's own file (untouched, carries OpenAI's C2PA
 # signature) over whatever the driver copied into the workdir.
@@ -272,17 +281,20 @@ if [[ -z "$img" || ! -f "$img" ]]; then
   echo "(log: $log)" >&2
   exit 1
 fi
+# The plan has paid for this image: any failure from here on is a delivery failure,
+# exit 5, so bin/subpowers never paints it again on another plan.
+delivery_failed() { local rc=$?; (( rc == 0 )) && return 0; echo "$me: painted but not delivered (exit $rc); the painted file: $img" >&2; exit 5; }
+trap delivery_failed EXIT
 if [[ -z "$saved" ]]; then
   echo "chatgpt-image: WARNING no image_gen result event in the log; this PNG may not come from the image model." >&2
 fi
+# One image_gen call costs 25k to 70k input tokens (measured 2026-09-26); far more
+# means the helper ran start-up routines or shell turns before painting.
+if [[ -n "$tin" ]] && (( tin > 150000 )); then
+  echo "chatgpt-image: WARNING this image used ${tin} input tokens: the helper did more than paint: check AGENTS.md and the shell flags" >&2
+fi
 
-dims_of() {
-  if command -v sips >/dev/null 2>&1; then
-    sips -g pixelWidth -g pixelHeight "$1" 2>/dev/null | awk '/pixelWidth/{w=$2}/pixelHeight/{h=$2}END{if(w)print w"x"h}'
-  else
-    python3 -c 'import struct,sys;d=open(sys.argv[1],"rb").read(24);print("%dx%d"%struct.unpack(">II",d[16:24]))' "$1" 2>/dev/null
-  fi
-}
+dims_of() { python3 "$here/imgops" dims "$1" 2>/dev/null || true; }
 
 cp "$img" "$out"
 raw_dims="$(dims_of "$out")"
@@ -294,12 +306,12 @@ if [[ -n "$size" && -n "$raw_dims" && "$raw_dims" != "$size" ]]; then
   rw="${raw_dims%x*}"; rh="${raw_dims#*x}"; sw="${size%x*}"; sh="${size#*x}"
   # Aspect counts as "the same" within 1% (the painter returns e.g. 1122x1402 for a 4:5 ask).
   dd=$(( rw * sh - rh * sw )); ok_aspect=""; (( dd * dd * 10000 <= (rh * sw) * (rh * sw) )) && ok_aspect=1
-  if [[ -n "$ok_aspect" ]] && command -v sips >/dev/null 2>&1; then
+  if [[ -n "$ok_aspect" ]] && python3 "$here/imgops" backend >/dev/null 2>&1; then
     cp "$out" "${stem}.original.png"
-    sips -z "$sh" "$sw" "$out" >/dev/null
+    python3 "$here/imgops" resize "$out" "$sw" "$sh"
     resized="resized locally from ${raw_dims}; signed original kept at ${stem}.original.png"
   elif [[ -n "$ok_aspect" ]]; then
-    resized="NOT resized: painter returned ${raw_dims}; sips (macOS) is not available here"
+    resized="NOT resized: painter returned ${raw_dims}; no image ops here (no Pillow, no sips); fix: python3 -m pip install --user pillow"
     echo "chatgpt-image: WARNING ${resized}" >&2
   else
     resized="NOT resized: painter returned ${raw_dims}, aspect differs from ${size}"
@@ -351,8 +363,9 @@ painter="OpenAI's current ChatGPT image model, chosen server-side (last confirme
   echo "  codex rollout: ${rollout:-<not found>}"
   echo "  transparent_background reported: ${alpha:-n/a}"
   echo "  image_gen saved_path: ${saved:-<not reported>}"
+  if [[ -n "$tin" ]]; then echo "  tokens: input=${tin} output=${tout}"; else echo "  tokens: not in the session record"; fi
   echo "  bytes: ${bytes}"
-} > "${stem}.prompt.txt"
+} > "${stem}.prompt.txt" || exit 5   # bash 3.2 does not stop on a failed redirect of a { } group
 
 echo "chatgpt-image: painted by OpenAI's current image model (C2PA: ${c2pa}); driver=${used}; refs=${n}; size=${dims}" >&2
 rm -rf "$workdir" "$log" "$err" 2>/dev/null || true

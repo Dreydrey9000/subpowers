@@ -122,7 +122,7 @@ The receipt also says when an image was cropped or upscaled locally, so nothing 
 
 **Is the receipt signed?** The receipt is a plain text file. The image itself carries the provider's content credential (C2PA); subpowers reads who signed it but does not cryptographically verify it.
 
-**Can it make photos of real people?** Please don't use it for photorealistic fakes of real people. Your own face (`--refs me`) and made-up characters are what it's for.
+**Can it make photos of real people?** Please don't use it for photorealistic fakes of real people. Nothing in the code stops you, so it's on you. Your own face (`--refs me`) and made-up characters are what it's for.
 
 ## The three painters
 
@@ -216,7 +216,7 @@ Never ask the user for an API key, and never put one in. subpowers only uses the
 
 - Images use your plan's normal usage limits; an image costs more of your allowance than a text message. If a plan runs out, that painter says so and the default mode moves to your next plan. It never switches to a paid API.
 - This rides on the official `codex`, `agy` and `grok` command-line tools, not on a published image API, so providers can change behavior. The doctor and the daily codex update are there for exactly that.
-- The `agy` CLI has no per-tool allowlist, so the Google call runs with `--sandbox` in an empty temporary profile and a temporary folder.
+- The `agy` CLI has no per-tool allowlist, so the Google painter cannot limit its helper to the image tool. Each call skips agy's permission prompts, so it runs with `--sandbox`, an empty temporary profile (no MCP servers) and a temporary folder.
 - subpowers is an independent open-source project. ChatGPT and Codex are trademarks of OpenAI; Antigravity, Gemini and Nano Banana are trademarks of Google; Grok and Grok Imagine are trademarks of xAI. None of them made or endorses this.
 
 ## What's next: build it with us

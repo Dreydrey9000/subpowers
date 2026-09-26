@@ -58,6 +58,14 @@ if [[ -f "$sp_cfg" ]]; then
   done < "$sp_cfg"
 fi
 
+src="${BASH_SOURCE[0]}"
+while [[ -L "$src" ]]; do
+  d="$(cd "$(dirname "$src")" && pwd)"; src="$(readlink "$src")"
+  [[ "$src" != /* ]] && src="$d/$src"
+done
+here="$(cd "$(dirname "$src")" && pwd)"
+me="grok-image"
+
 usage() { echo 'usage: grok-image "<prompt>" <out.jpg|png> [--size WxH] [--ref IMG]... [--driver MODEL]' >&2; exit 2; }
 [[ $# -lt 2 ]] && usage
 
@@ -89,7 +97,7 @@ command -v grok >/dev/null 2>&1 || {
 genv=(env -u XAI_API_KEY -u GROK_CODE_XAI_API_KEY GROK_DISABLE_API_KEY_AUTH=1)
 
 models_out="$(cd "${TMPDIR:-/tmp}" && "${genv[@]}" grok models 2>&1 || true)"
-if ! printf '%s' "$models_out" | grep -qi "logged in with grok.com"; then
+if ! grep -qi "logged in with grok.com" <<<"$models_out"; then
   echo "grok-image: grok is not logged in with a grok.com account (run: grok login). Refusing to fall back to an API key." >&2
   exit 3
 fi
@@ -131,8 +139,8 @@ ref_list=""; n=0; ref_pad=""
 for r in ${refs[@]+"${refs[@]}"}; do
   n=$((n+1))
   ext="$(printf '%s' "${r##*.}" | tr '[:upper:]' '[:lower:]')"
-  if [[ "$ext" == "heic" || "$ext" == "heif" ]] && command -v sips >/dev/null 2>&1; then
-    local_name="ref${n}.jpg"; sips -s format jpeg "$r" --out "$workdir/$local_name" >/dev/null
+  if [[ "$ext" == "heic" || "$ext" == "heif" ]] && python3 "$here/imgops" convert "$r" "$workdir/ref${n}.jpg" 2>/dev/null; then
+    local_name="ref${n}.jpg"
   else
     local_name="ref${n}.${ext}"; cp "$r" "$workdir/$local_name"
   fi
@@ -142,23 +150,7 @@ for r in ${refs[@]+"${refs[@]}"}; do
   # had to be cropped then upscaled 1.65x; padded, it came back 1280x720 with the
   # scene painted edge to edge. Needs Pillow; without it the photo goes as-is.
   if [[ $n -eq 1 && "$aspect" != "auto" ]]; then
-    padded="$(python3 - "$workdir/$local_name" "$aspect" "$workdir/ref1-padded.jpg" 2>/dev/null <<'PY' || true
-import math, sys
-from PIL import Image, ImageFilter, ImageOps
-src, asp, dst = sys.argv[1], sys.argv[2], sys.argv[3]
-tw, th = (int(x) for x in asp.split(":"))
-im = ImageOps.exif_transpose(Image.open(src)).convert("RGB")
-if abs(math.log((im.width / im.height) / (tw / th))) < math.log(1.15): sys.exit()
-W = max(im.width, round(im.height * tw / th)); H = round(W * th / tw)
-if H < im.height: H = im.height; W = round(H * tw / th)
-bg = ImageOps.fit(im, (W, H)).filter(ImageFilter.GaussianBlur(max(W, H) // 25))
-bg = Image.blend(bg, Image.new("RGB", bg.size, (0, 0, 0)), 0.35)
-fg = ImageOps.contain(im, (W, H))
-bg.paste(fg, ((W - fg.width) // 2, (H - fg.height) // 2))
-bg.save(dst, quality=92)
-print(f"{im.width}x{im.height} -> {W}x{H}")
-PY
-)"
+    padded="$(python3 "$here/imgops" pad "$workdir/$local_name" "$aspect" "$workdir/ref1-padded.jpg" 2>/dev/null || true)"
     if [[ -n "$padded" ]]; then
       local_name="ref1-padded.jpg"; ref_pad="first reference padded to ${aspect} (${padded})"
     fi
@@ -185,7 +177,10 @@ ${prompt}
 PROMPT>>>
 EOF
 
-tcmd=(); command -v timeout >/dev/null 2>&1 && tcmd=(timeout "$tmo")
+# Stock macOS has no timeout(1); perl's alarm does the same job there (exit 142, not 124).
+tcmd=()
+if command -v timeout >/dev/null 2>&1; then tcmd=(timeout "$tmo")
+elif command -v perl >/dev/null 2>&1; then tcmd=(perl -e 'alarm shift; exec @ARGV' "$tmo"); fi
 margs=(); [[ -n "$driver" ]] && margs=(-m "$driver")
 
 t0=$(date +%s)
@@ -242,7 +237,7 @@ field() { python3 -c 'import json,sys;print(json.loads(sys.argv[1])[sys.argv[2]]
 run_grok "$imodel"
 imodel_note="${imodel:-xAI remote default}"
 if [[ -n "$imodel" && ( -z "$saved" || ! -f "$saved" ) ]] \
-   && printf '%s' "$terr" | grep -qiE 'does not exist|not have access|not.found'; then
+   && grep -qiE 'does not exist|not have access|not.found' <<<"$terr"; then
   # This account cannot use the quality model: paint once more on xAI's default.
   echo "grok-image: ${imodel} unavailable on this account; retrying on xAI's default Imagine model" >&2
   run_grok ""
@@ -251,13 +246,13 @@ fi
 wall=$(( $(date +%s) - t0 ))
 
 if [[ -z "$saved" || ! -f "$saved" ]]; then
-  if [[ -n "$terr" ]]; then
+  if [[ $rc -eq 124 || $rc -eq 142 ]]; then
+    echo "grok-image: timed out after ${tmo}s" >&2
+  elif [[ -n "$terr" ]]; then
     echo "grok-image: the ${tool} tool failed: ${terr}" >&2
-    if printf '%s' "$terr" | grep -qi "SuperGrok feature"; then exit 4; fi
+    if grep -qi "SuperGrok feature" <<<"$terr"; then exit 4; fi
   elif [[ "$ncalls" == "0" ]]; then
     echo "grok-image: grok finished (exit ${rc}, ${wall}s) but never called ${tool}. Rerun, or reword a prompt that reads like a policy refusal. Reply: $(field reply)" >&2
-  elif [[ $rc -eq 124 ]]; then
-    echo "grok-image: timed out after ${tmo}s" >&2
   else
     echo "grok-image: no ${tool} output was found (exit ${rc})." >&2
   fi
@@ -265,11 +260,15 @@ if [[ -z "$saved" || ! -f "$saved" ]]; then
   echo "(stream log: $log)" >&2
   exit 1
 fi
+# The plan has paid for this image: any failure from here on is a delivery failure,
+# exit 5, so bin/subpowers never paints it again on another plan.
+delivery_failed() { local rc=$?; (( rc == 0 )) && return 0; echo "$me: painted but not delivered (exit $rc); the painted file: $saved" >&2; exit 5; }
+trap delivery_failed EXIT
 
 verbatim="yes"
 [[ "$sent" == "$prompt" ]] || verbatim="NO (the driver changed the prompt; see RELAYED PROMPT)"
 
-dims_of() { sips -g pixelWidth -g pixelHeight "$1" 2>/dev/null | awk '/pixelWidth/{w=$2}/pixelHeight/{h=$2}END{if(w)print w"x"h}'; }
+dims_of() { python3 "$here/imgops" dims "$1" 2>/dev/null || true; }
 src_ext="$(printf '%s' "${saved##*.}" | tr '[:upper:]' '[:lower:]')"
 raw_dims="$(dims_of "$saved")"
 original="${stem}.original.${src_ext}"
@@ -280,6 +279,15 @@ case "$out_ext:$src_ext" in jpg:jpg|jpeg:jpg|jpg:jpeg|jpeg:jpeg|png:png|webp:web
 
 need_size=""; kept_original=""
 [[ -n "$size" && -n "$raw_dims" && "$raw_dims" != "$size" ]] && need_size=1
+
+# With no image ops here (no Pillow, no sips) the plan has already paid, so the
+# painter's own file is delivered untouched under its real extension.
+if ! python3 "$here/imgops" backend >/dev/null 2>&1; then
+  [[ -n "$same_fmt" ]] || out="${stem}.${src_ext}"
+  same_fmt=1; need_size=""
+  notes="the painter's own ${src_ext}, untouched: no image ops here (no Pillow, no sips), so no conversion or resize; fix: python3 -m pip install --user pillow"
+  echo "grok-image: WARNING delivered ${notes}" >&2
+fi
 
 if [[ -z "$same_fmt" || -n "$need_size" ]]; then
   # Keep the untouched, C2PA-signed file; edits below lose the signature.
@@ -293,11 +301,11 @@ if [[ -n "$need_size" ]]; then
   if (( rw * sh != rh * sw )); then
     # Center-crop to the requested aspect first.
     if (( rw * sh > rh * sw )); then cw=$(( rh * sw / sh )); ch=$rh; else cw=$rw; ch=$(( rw * sh / sw )); fi
-    sips --cropToHeightWidth "$ch" "$cw" "$work" >/dev/null
+    python3 "$here/imgops" crop "$work" "$cw" "$ch"
     notes="center-cropped ${raw_dims} -> ${cw}x${ch}; "
     echo "grok-image: WARNING aspect: painter returned ${raw_dims} (asked ${aspect}); cropped to match ${size}" >&2
   fi
-  sips -z "$sh" "$sw" "$work" >/dev/null
+  python3 "$here/imgops" resize "$work" "$sw" "$sh"
   if (( sw > rw || sh > rh )); then
     notes="${notes}UPSCALED to ${size} locally (painter max for ${aspect} was ${raw_dims})"
     echo "grok-image: WARNING upscaled ${raw_dims} -> ${size}; detail is interpolated, not painted" >&2
@@ -310,8 +318,7 @@ if [[ -n "$same_fmt" ]]; then
   cp "$work" "$out"
 else
   case "$out_ext" in
-    png)  sips -s format png "$work" --out "$out" >/dev/null ;;
-    jpg|jpeg) sips -s format jpeg "$work" --out "$out" >/dev/null ;;
+    png|jpg|jpeg) python3 "$here/imgops" convert "$work" "$out" ;;
     *) echo "grok-image: WARNING unsupported output extension .${out_ext}; writing JPEG bytes" >&2; cp "$work" "$out" ;;
   esac
   notes="${notes:+$notes; }converted ${src_ext} -> ${out_ext}"
@@ -345,7 +352,7 @@ PY
   echo "  grok: $(grok --version 2>/dev/null | head -n 1)"
   echo "  auth: grok.com session (API-key auth disabled for this call)"
   echo "  tool: ${tool} (xAI Imagine API)"
-  echo "  image model: ${imodel_note} | C2PA says: ${c2pa}"
+  echo "  image model requested: ${imodel_note} | C2PA says: ${c2pa}"
   echo "  driver model: ${driver:-grok default} (reasoning ${effort})"
   echo "  prompt relayed verbatim: ${verbatim}"
   echo "  references: ${n}${refs[0]+ ($(printf '%s ' "${refs[@]}"))}${ref_pad:+; ${ref_pad}}"
@@ -355,8 +362,8 @@ PY
   echo "  grok session: ${session} (saved file: ${saved})"
   echo "  wall time: ${wall}s"
   echo "  bytes: ${bytes}"
-} > "${stem}.prompt.txt"
+} > "${stem}.prompt.txt" || exit 5   # bash 3.2 does not stop on a failed redirect of a { } group
 
-echo "grok-image: painted by Grok Imagine (C2PA: ${c2pa}); model=${imodel_note}; tool=${tool}; driver=${driver:-default} @${effort}; refs=${n}; size=${dims}; ${wall}s" >&2
+echo "grok-image: painted by Grok Imagine (C2PA: ${c2pa}); model requested=${imodel_note}; tool=${tool}; driver=${driver:-default} @${effort}; refs=${n}; size=${dims}; ${wall}s" >&2
 rm -rf "$workdir" 2>/dev/null || true   # only the temp folder this run created
 echo "$out"

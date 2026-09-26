@@ -28,10 +28,15 @@ here="$(cd "$(dirname "$src")" && pwd)"
 HOME_DIR="${SUBPOWERS_HOME:-$HOME/.subpowers}"
 ORDER="chatgpt antigravity grok"
 
-usage() { sed -n '2,21p' "$here/subpowers" | sed 's/^# \{0,1\}//' >&2; exit "${1:-2}"; }
+# The help is the header comment, read up to its first non-comment line so it cannot drift.
+usage() { awk 'NR == 1 { next } !/^#/ { exit } { sub(/^# ?/, ""); print }' "$here/subpowers" >&2; exit "${1:-2}"; }
 say() { echo "subpowers: $*" >&2; }
 
-has_chatgpt() { command -v codex >/dev/null 2>&1 && codex login status 2>&1 | grep -qi chatgpt; }
+has_chatgpt() {
+  local o; command -v codex >/dev/null 2>&1 || return 1
+  o="$(codex login status 2>&1)" || true
+  grep -qi chatgpt <<<"$o"
+}
 # A plan counts as ON only when its CLI answers as logged in (installed is not enough:
 # a cancelled plan's CLI is still installed). Answers are cached for 10 minutes in
 # ~/.cache/subpowers so a fan-out checks once; a painter that reports the plan
@@ -44,7 +49,12 @@ login_cached() {  # login_cached <painter> <check-fn>
   if "$2"; then echo on >"$f"; else echo off >"$f"; return 1; fi
 }
 mark_off() { mkdir -p "$CACHE_DIR"; echo off >"$CACHE_DIR/login-$1"; }
-tmo() { if command -v timeout >/dev/null 2>&1; then timeout 45 "$@"; else "$@"; fi; }
+# Stock macOS has no timeout(1); perl's alarm does the same job there.
+tmo() {
+  if command -v timeout >/dev/null 2>&1; then timeout 45 "$@"
+  elif command -v perl >/dev/null 2>&1; then perl -e 'alarm shift; exec @ARGV' 45 "$@"
+  else "$@"; fi
+}
 # Output is captured before grep: under pipefail, `cli | grep -q` fails when grep exits
 # early and the CLI dies of SIGPIPE, which read a logged-in plan as OFF (2026-09-26).
 chk_antigravity() {
@@ -83,7 +93,7 @@ ref_files() {
 # Antigravity takes at most 3 references, so extra ones are dropped for it (with a note).
 paint() {  # paint <painter|auto> <prompt> <out> [painter args...]
   local want="$1" prompt="$2" out="$3"; shift 3
-  local tries rc p
+  local tries rc p got
   if [[ "$want" == auto ]]; then tries="$(connected)"; else tries="$want"; fi
   [[ -n "$tries" ]] || { say "no painter is connected. Run: subpowers doctor"; return 3; }
   for p in $tries; do
@@ -99,25 +109,33 @@ paint() {  # paint <painter|auto> <prompt> <out> [painter args...]
       args+=("$a")
     done
     if [[ "$p" == antigravity && $nref -gt 3 ]]; then say "antigravity takes 3 references; using the first 3 of $nref"; fi
+    # The painter prints the file it delivered, which keeps its real extension
+    # when this machine cannot convert it (no Pillow, no sips).
     set +e
-    bash "$here/${p}-image" "$prompt" "$out" ${args[@]+"${args[@]}"}
+    got="$(bash "$here/${p}-image" "$prompt" "$out" ${args[@]+"${args[@]}"})"
     rc=$?
     set -e
+    if [[ -n "$got" ]]; then echo "$got"; fi
     if [[ $rc -eq 0 ]]; then
-      python3 "$here/library" add "$out" >/dev/null || true   # index it; never fails the image
+      python3 "$here/library" add "${got:-$out}" >/dev/null || true   # index it; never fails the image
       return 0
     fi
     [[ $rc -eq 4 ]] && mark_off "$p"   # the plan lacks this feature (e.g. image gen not on this tier)
     [[ $rc -eq 2 ]] && return 2
+    [[ $rc -eq 5 ]] && return 5   # painted but not delivered: the plan already paid, never paint it twice
     if [[ "$want" == auto ]]; then say "$p failed (exit $rc); trying the next painter"; else return $rc; fi
   done
   say "every connected painter failed"; return 1
 }
 
-# Side-by-side sheet of several images with labels (needs python3 + Pillow; skipped quietly otherwise).
+# Side-by-side sheet of several images with labels. Needs Pillow; without it, says so and skips.
 contact_sheet() {  # contact_sheet <out.jpg> <label=path>...
   local out="$1"; shift
-  python3 - "$out" "$@" <<'PY' 2>/dev/null || return 0
+  if ! python3 -c 'import PIL' 2>/dev/null; then
+    say "no side-by-side sheet: it needs Pillow (python3 -m pip install --user pillow); every image is still saved"
+    return 0
+  fi
+  python3 - "$out" "$@" <<'PY' 2>/dev/null || { say "could not build the side-by-side sheet; every image is still saved"; return 0; }
 import sys
 from PIL import Image, ImageDraw, ImageFont
 out, items = sys.argv[1], [a.split("=", 1) for a in sys.argv[2:]]
@@ -219,7 +237,11 @@ Photorealistic, evenly spaced, no text, no labels, no watermark."
     done < "$shots"
     for pid in ${pids[@]+"${pids[@]}"}; do wait "$pid" || say "a shot failed; continuing"; done
     [[ $n -gt 0 ]] || { say "the shot list is empty"; exit 2; }
-    have=(); for it in "${files[@]}"; do [[ -f "${it#*=}" ]] && have+=("$it"); done
+    have=()
+    for it in "${files[@]}"; do
+      f="${it#*=}"; [[ -f "$f" ]] || f="${f%.png}.jpg"   # delivered as jpg where nothing can convert it
+      [[ -f "$f" ]] && have+=("${it%%=*}=$f")
+    done
     say "${#have[@]} of $n shots painted"
     contact_sheet "$outdir/storyboard.jpg" ${have[@]+"${have[@]}"} >/dev/null
     if [[ -f "$outdir/storyboard.jpg" ]]; then echo "$outdir/storyboard.jpg"; else echo "$outdir"; fi

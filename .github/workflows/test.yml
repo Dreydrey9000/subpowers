@@ -1,0 +1,38 @@
+name: test
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    name: ${{ matrix.os }}, Pillow ${{ matrix.pillow && 'installed' || 'hidden' }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, pillow: true }
+          - { os: ubuntu-latest, pillow: false }
+          - { os: macos-latest, pillow: false }
+    steps:
+      - uses: actions/checkout@v4
+      # System-wide, not --user: tests/run.sh gives every command a temporary HOME.
+      - name: Install Pillow
+        if: matrix.pillow
+        run: sudo apt-get update && sudo apt-get install -y python3-pil
+      - name: bash -n every shell script
+        run: |
+          for f in bin/* tests/run.sh install.sh; do
+            if head -n 1 "$f" | grep -q bash; then /bin/bash -n "$f" || exit 1; echo "ok  $f"; fi
+          done
+      - name: tests/run.sh, sips hidden
+        run: /bin/bash tests/run.sh
+        env:
+          SUBPOWERS_TEST_NO_PILLOW: ${{ !matrix.pillow && '1' || '' }}
+      - name: tests/run.sh, sips present
+        if: runner.os == 'macOS'
+        run: /bin/bash tests/run.sh
+        env:
+          SUBPOWERS_TEST_SIPS: '1'
+          SUBPOWERS_TEST_NO_PILLOW: '1'

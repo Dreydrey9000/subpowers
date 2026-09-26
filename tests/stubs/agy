@@ -1,0 +1,59 @@
+#!/usr/bin/env python3
+"""Stand-in for the Antigravity CLI (agy): model listing and -p stream-json with generate_image into the profile."""
+import json
+import os
+import re
+import sys
+import time
+import uuid
+
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+import _stub  # noqa: E402
+import fakeimg  # noqa: E402
+
+a = sys.argv[1:]
+_stub.log("agy")
+profile = _stub.arg("--gemini_dir") or os.path.expanduser("~/.gemini")
+cmd = [v for v in a if not v.startswith("--gemini_dir")]
+
+if cmd[:1] == ["--version"]:
+    print("1.2.11")
+elif cmd[:1] == ["models"]:
+    if os.environ.get("STUB_AGY_LOGGED_OUT"):
+        print("Please sign in: run agy")
+        sys.exit(1)
+    print("Fetching available models...")
+    for v in ("3.8", "3.7"):
+        for e in ("high", "medium", "low"):
+            print(f"gemini-{v}-flash-{e}\tGemini {v} Flash ({e.title()})")
+    print("gemini-3.1-pro-high\tGemini 3.1 Pro (High)")
+    _stub.chatty()
+elif "-p" in cmd:
+    task = _stub.arg("-p")
+    m = re.search(r'AspectRatio to "([0-9:]+)"', task)
+    aspect = m.group(1) if m else "1:1"
+    refs = re.findall(r'"(/[^"]+)"', task.split("\n", 1)[0]) if task.startswith("There are") else []
+    cid = str(uuid.uuid4())
+    brain = os.path.join(profile, "antigravity-cli", "brain", cid)
+    os.makedirs(os.path.join(brain, ".system_generated", "logs"), exist_ok=True)
+    w, h = _stub.DIMS[aspect]
+    saved = os.path.join(brain, f"door_image_{int(time.time())}.jpg")
+    fakeimg.jpeg(saved, w, h, b"c2pa Google C2PA Core Generator Library Created by Google Generative AI")
+    _stub.painted("agy", saved)
+    prompt = re.search(r"PROMPT: (.*?)\n\nRequirements:", task, re.S).group(1)
+    with open(os.path.join(brain, ".system_generated", "logs", "transcript_full.jsonl"), "w") as f:
+        f.write(json.dumps({"tool_calls": [{"name": "generate_image", "args": {
+            "Prompt": prompt, "AspectRatio": aspect, "ImageName": "door_image", "ImagePaths": refs}}]}) + "\n")
+        f.write(json.dumps({"media": [{"mime_type": "image/jpeg", "uri": "file://" + saved}]}) + "\n")
+    conv = os.path.join(profile, "antigravity-cli", "conversations")
+    os.makedirs(conv, exist_ok=True)
+    name = b"gemini-3.1-flash-image"
+    with open(os.path.join(conv, cid + ".db"), "wb") as f:
+        f.write(b"SQLite format 3\x00" + b"\x0a" + bytes([len(name)]) + name + b"\x00")
+    print(json.dumps({"init": {"conversation_id": cid}}))
+    print(json.dumps({"step_update": {"conversation_id": cid, "tool_name": "generate_image", "state": "DONE",
+                                      "duration_seconds": 11.5}}))
+    print(json.dumps({"result": {"conversation_id": cid, "status": "SUCCESS", "response": saved}}))
+else:
+    print("agy stub: unhandled " + " ".join(a), file=sys.stderr)
+    sys.exit(2)

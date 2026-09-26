@@ -7,7 +7,7 @@
 # Usage: update-codex [--apply] [--daily]
 #   (no flags)  report only: "codex 0.155.1 -> 0.157.0 available" or "... is current"
 #   --apply     run `codex update` when behind
-#   --daily     skip if a check succeeded in the last 24 hours (the image door uses this)
+#   --daily     skip if an --apply check ran in the last 24 hours (the image door uses this)
 # Exit: 0 current or updated, 1 behind and not updated, 2 could not check.
 set -uo pipefail
 
@@ -34,7 +34,9 @@ latest="$(curl -fsS --max-time 8 https://registry.npmjs.org/@openai/codex/latest
 if [[ -z "$latest" ]]; then
   echo "update-codex: could not reach the npm registry; codex $have unchecked" >&2; exit 2
 fi
-mkdir -p "$(dirname "$stamp")" && touch "$stamp"
+# Stamp only runs that would have updated: a report (doctor without --fix) must not
+# skip the painter's daily --apply for the next 24 hours.
+[[ -n "$apply" ]] && mkdir -p "$(dirname "$stamp")" && touch "$stamp"
 
 behind="$(python3 - "$have" "$latest" <<'PY'
 import re, sys

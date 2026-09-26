@@ -1,0 +1,6 @@
+#!/usr/bin/env python3
+"""Stand-in for curl: the npm registry answers with STUB_NPM_VERSION."""
+import json
+import os
+
+print(json.dumps({"version": os.environ.get("STUB_NPM_VERSION", "0.157.0")}))
