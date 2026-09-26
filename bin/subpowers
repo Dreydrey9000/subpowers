@@ -128,10 +128,14 @@ paint() {  # paint <painter|auto> <prompt> <out> [painter args...]
   say "every connected painter failed"; return 1
 }
 
-# Side-by-side sheet of several images with labels (needs python3 + Pillow; skipped quietly otherwise).
+# Side-by-side sheet of several images with labels. Needs Pillow; without it, says so and skips.
 contact_sheet() {  # contact_sheet <out.jpg> <label=path>...
   local out="$1"; shift
-  python3 - "$out" "$@" <<'PY' 2>/dev/null || return 0
+  if ! python3 -c 'import PIL' 2>/dev/null; then
+    say "no side-by-side sheet: it needs Pillow (python3 -m pip install --user pillow); every image is still saved"
+    return 0
+  fi
+  python3 - "$out" "$@" <<'PY' 2>/dev/null || { say "could not build the side-by-side sheet; every image is still saved"; return 0; }
 import sys
 from PIL import Image, ImageDraw, ImageFont
 out, items = sys.argv[1], [a.split("=", 1) for a in sys.argv[2:]]
