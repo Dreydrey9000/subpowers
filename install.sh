@@ -92,11 +92,13 @@ echo
 if [[ "$root" != "$HOME" ]]; then
   echo "(--dest install: skipped codex install and doctor)"
 elif [[ -n "$doctor" ]]; then
-  bash "$target/bin/doctor" || {
+  # No painter logged in yet is the normal state of a fresh install, not a failed one:
+  # exit 0 and say what to log in to. Only a real install error exits non-zero.
+  if ! bash "$target/bin/doctor"; then
     echo
-    echo "Next: log in to at least one subscription, then run: subpowers doctor"
+    echo "Installed. Next: log in to at least one subscription, then run: subpowers doctor"
     echo "  ChatGPT:     codex login   (choose Sign in with ChatGPT)"
     echo "  Antigravity: agy           (sign in once, then quit)"
-    exit 1
-  }
+    echo "  Grok:        grok login    (SuperGrok plan)"
+  fi
 fi
