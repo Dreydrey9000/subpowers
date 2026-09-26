@@ -182,6 +182,12 @@ for d in "$HOME/.claude/skills/subpowers" "$HOME/.agents/skills/subpowers" "$HOM
 done
 if command -v subpowers >/dev/null 2>&1; then pass "subpowers command on PATH"
 else warn "subpowers command not on PATH (agents can still run $here/subpowers; add ~/.local/bin to PATH to type it)"; fi
+# Informational, never a failure: the drift radar is optional.
+if [[ -f "$HOME/Library/LaunchAgents/com.subpowers.canary.plist" ]]; then
+  info "canary LaunchAgent installed (daily 07:15 vendor-drift check)"
+else
+  info "canary LaunchAgent not installed (optional) -> subpowers canary --install-launchagent"
+fi
 
 if [[ -n "$smoke" ]]; then
   for p in ${ready[@]+"${ready[@]}"}; do
