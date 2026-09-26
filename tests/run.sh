@@ -514,6 +514,7 @@ check "minute 15" has "$plist" "<integer>15</integer>"
 check "runs --live --notify" has "$plist" "--notify"
 check "logs under SUBPOWERS_HOME" has "$plist" "\.subpowers/canary/launchd\.log"
 check "explicit PATH EnvironmentVariables" has "$plist" "/opt/homebrew/bin"
+check "keeps your shell's PATH order first (checks the CLIs you actually use)" has "$plist" "<string>$P:"
 check "launchctl bootstrap called" called '"launchctl"' '"bootstrap"'
 run python3 "$bin/canary" --install-launchagent
 check "second install exit 0 (idempotent)" exits 0

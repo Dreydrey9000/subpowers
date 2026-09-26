@@ -197,13 +197,20 @@ def install_launchagent():
     os.makedirs(CANARY_DIR, exist_ok=True)
     log = os.path.join(CANARY_DIR, "launchd.log")
     home = os.path.expanduser("~")
+    # The installing shell's own PATH order comes first, so the nightly check finds the same
+    # CLIs the user paints with (2026-09-26: ~/.local/bin first made it check an older second
+    # codex install). The fixed dirs are appended as a fallback.
+    path = []
+    for d in os.environ.get("PATH", "").split(os.pathsep) + [
+            os.path.join(home, ".local", "bin"), "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"]:
+        if os.path.isabs(d) and d not in path:
+            path.append(d)
     spec = {
         "Label": LAUNCHAGENT,
         # The python3 that is running this very canary, so the agent never
         # depends on PATH to find one.
         "ProgramArguments": [sys.executable, os.path.realpath(__file__), "--live", "--notify"],
-        "EnvironmentVariables": {"PATH": os.pathsep.join([
-            os.path.join(home, ".local", "bin"), "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"])},
+        "EnvironmentVariables": {"PATH": os.pathsep.join(path)},
         "StartCalendarInterval": {"Hour": 7, "Minute": 15},
         "StandardOutPath": log,
         "StandardErrorPath": log,
