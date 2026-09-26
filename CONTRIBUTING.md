@@ -25,6 +25,7 @@ subpowers doctor --smoke
 ```bash
 for f in bin/subpowers bin/chatgpt-image bin/antigravity-image bin/doctor bin/update-codex install.sh; do /bin/bash -n "$f"; done
 python3 -m py_compile bin/resolve-drivers
+bash tests/run.sh   # every painter end to end against stub CLIs; paints nothing, spends no quota
 bash install.sh --dest /tmp/subpowers-test --no-doctor   # installer dry run
 subpowers doctor
 ```
