@@ -30,7 +30,7 @@ subpowers --version   # which version is installed
 | | `chatgpt` (default when connected) | `google` (also accepts `antigravity`) | `grok` |
 |---|---|---|---|
 | Model | OpenAI's current image model | Google's Nano Banana 2 | xAI's Grok Imagine |
-| Speed | 60 to 100 s | 40 to 120 s | 45 to 100 s |
+| Speed | 60 to 100 s | 20 to 120 s | 45 to 100 s |
 | Best at | text in images, precise product fidelity | fast drafts, likeness from references, photoreal | bold stylized looks, a third opinion |
 | Sizes | 1024x1024, 1536x1024, 1024x1536 exact; near shapes resized | 1:1, 2:3, 3:2, 3:4, 4:3, 9:16, 16:9 | 1:1, 16:9, 9:16, 3:2, 2:3 |
 | References | any number | up to 3 (extra ones dropped) | yes (image edit; the first photo is padded to the asked shape so the scene paints wide) |
