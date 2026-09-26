@@ -118,10 +118,9 @@ img_args=(); ref_list=""; n=0
 for r in ${refs[@]+"${refs[@]}"}; do
   n=$((n+1))
   ext="$(printf '%s' "${r##*.}" | tr '[:upper:]' '[:lower:]')"
-  if [[ "$ext" == "heic" || "$ext" == "heif" ]] && command -v sips >/dev/null 2>&1; then
-    # iPhone photos: the image tool wants png/jpg/webp.
+  # iPhone photos: the image tool wants png/jpg/webp.
+  if [[ "$ext" == "heic" || "$ext" == "heif" ]] && python3 "$here/imgops" convert "$r" "$workdir/ref${n}.jpg" 2>/dev/null; then
     local_name="ref${n}.jpg"
-    sips -s format jpeg "$r" --out "$workdir/$local_name" >/dev/null
   else
     local_name="ref${n}.${ext}"
     cp "$r" "$workdir/$local_name"
@@ -276,13 +275,7 @@ if [[ -z "$saved" ]]; then
   echo "chatgpt-image: WARNING no image_gen result event in the log; this PNG may not come from the image model." >&2
 fi
 
-dims_of() {
-  if command -v sips >/dev/null 2>&1; then
-    sips -g pixelWidth -g pixelHeight "$1" 2>/dev/null | awk '/pixelWidth/{w=$2}/pixelHeight/{h=$2}END{if(w)print w"x"h}'
-  else
-    python3 -c 'import struct,sys;d=open(sys.argv[1],"rb").read(24);print("%dx%d"%struct.unpack(">II",d[16:24]))' "$1" 2>/dev/null
-  fi
-}
+dims_of() { python3 "$here/imgops" dims "$1" 2>/dev/null || true; }
 
 cp "$img" "$out"
 raw_dims="$(dims_of "$out")"
@@ -294,12 +287,12 @@ if [[ -n "$size" && -n "$raw_dims" && "$raw_dims" != "$size" ]]; then
   rw="${raw_dims%x*}"; rh="${raw_dims#*x}"; sw="${size%x*}"; sh="${size#*x}"
   # Aspect counts as "the same" within 1% (the painter returns e.g. 1122x1402 for a 4:5 ask).
   dd=$(( rw * sh - rh * sw )); ok_aspect=""; (( dd * dd * 10000 <= (rh * sw) * (rh * sw) )) && ok_aspect=1
-  if [[ -n "$ok_aspect" ]] && command -v sips >/dev/null 2>&1; then
+  if [[ -n "$ok_aspect" ]] && python3 "$here/imgops" backend >/dev/null 2>&1; then
     cp "$out" "${stem}.original.png"
-    sips -z "$sh" "$sw" "$out" >/dev/null
+    python3 "$here/imgops" resize "$out" "$sw" "$sh"
     resized="resized locally from ${raw_dims}; signed original kept at ${stem}.original.png"
   elif [[ -n "$ok_aspect" ]]; then
-    resized="NOT resized: painter returned ${raw_dims}; sips (macOS) is not available here"
+    resized="NOT resized: painter returned ${raw_dims}; no image ops here (no Pillow, no sips); fix: python3 -m pip install --user pillow"
     echo "chatgpt-image: WARNING ${resized}" >&2
   else
     resized="NOT resized: painter returned ${raw_dims}, aspect differs from ${size}"

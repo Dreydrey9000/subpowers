@@ -58,6 +58,13 @@ if [[ -f "$sp_cfg" ]]; then
   done < "$sp_cfg"
 fi
 
+src="${BASH_SOURCE[0]}"
+while [[ -L "$src" ]]; do
+  d="$(cd "$(dirname "$src")" && pwd)"; src="$(readlink "$src")"
+  [[ "$src" != /* ]] && src="$d/$src"
+done
+here="$(cd "$(dirname "$src")" && pwd)"
+
 usage() { echo 'usage: grok-image "<prompt>" <out.jpg|png> [--size WxH] [--ref IMG]... [--driver MODEL]' >&2; exit 2; }
 [[ $# -lt 2 ]] && usage
 
@@ -131,8 +138,8 @@ ref_list=""; n=0; ref_pad=""
 for r in ${refs[@]+"${refs[@]}"}; do
   n=$((n+1))
   ext="$(printf '%s' "${r##*.}" | tr '[:upper:]' '[:lower:]')"
-  if [[ "$ext" == "heic" || "$ext" == "heif" ]] && command -v sips >/dev/null 2>&1; then
-    local_name="ref${n}.jpg"; sips -s format jpeg "$r" --out "$workdir/$local_name" >/dev/null
+  if [[ "$ext" == "heic" || "$ext" == "heif" ]] && python3 "$here/imgops" convert "$r" "$workdir/ref${n}.jpg" 2>/dev/null; then
+    local_name="ref${n}.jpg"
   else
     local_name="ref${n}.${ext}"; cp "$r" "$workdir/$local_name"
   fi
@@ -142,23 +149,7 @@ for r in ${refs[@]+"${refs[@]}"}; do
   # had to be cropped then upscaled 1.65x; padded, it came back 1280x720 with the
   # scene painted edge to edge. Needs Pillow; without it the photo goes as-is.
   if [[ $n -eq 1 && "$aspect" != "auto" ]]; then
-    padded="$(python3 - "$workdir/$local_name" "$aspect" "$workdir/ref1-padded.jpg" 2>/dev/null <<'PY' || true
-import math, sys
-from PIL import Image, ImageFilter, ImageOps
-src, asp, dst = sys.argv[1], sys.argv[2], sys.argv[3]
-tw, th = (int(x) for x in asp.split(":"))
-im = ImageOps.exif_transpose(Image.open(src)).convert("RGB")
-if abs(math.log((im.width / im.height) / (tw / th))) < math.log(1.15): sys.exit()
-W = max(im.width, round(im.height * tw / th)); H = round(W * th / tw)
-if H < im.height: H = im.height; W = round(H * tw / th)
-bg = ImageOps.fit(im, (W, H)).filter(ImageFilter.GaussianBlur(max(W, H) // 25))
-bg = Image.blend(bg, Image.new("RGB", bg.size, (0, 0, 0)), 0.35)
-fg = ImageOps.contain(im, (W, H))
-bg.paste(fg, ((W - fg.width) // 2, (H - fg.height) // 2))
-bg.save(dst, quality=92)
-print(f"{im.width}x{im.height} -> {W}x{H}")
-PY
-)"
+    padded="$(python3 "$here/imgops" pad "$workdir/$local_name" "$aspect" "$workdir/ref1-padded.jpg" 2>/dev/null || true)"
     if [[ -n "$padded" ]]; then
       local_name="ref1-padded.jpg"; ref_pad="first reference padded to ${aspect} (${padded})"
     fi
@@ -269,7 +260,7 @@ fi
 verbatim="yes"
 [[ "$sent" == "$prompt" ]] || verbatim="NO (the driver changed the prompt; see RELAYED PROMPT)"
 
-dims_of() { sips -g pixelWidth -g pixelHeight "$1" 2>/dev/null | awk '/pixelWidth/{w=$2}/pixelHeight/{h=$2}END{if(w)print w"x"h}'; }
+dims_of() { python3 "$here/imgops" dims "$1" 2>/dev/null || true; }
 src_ext="$(printf '%s' "${saved##*.}" | tr '[:upper:]' '[:lower:]')"
 raw_dims="$(dims_of "$saved")"
 original="${stem}.original.${src_ext}"
@@ -280,6 +271,15 @@ case "$out_ext:$src_ext" in jpg:jpg|jpeg:jpg|jpg:jpeg|jpeg:jpeg|png:png|webp:web
 
 need_size=""; kept_original=""
 [[ -n "$size" && -n "$raw_dims" && "$raw_dims" != "$size" ]] && need_size=1
+
+# With no image ops here (no Pillow, no sips) the plan has already paid, so the
+# painter's own file is delivered untouched under its real extension.
+if ! python3 "$here/imgops" backend >/dev/null 2>&1; then
+  [[ -n "$same_fmt" ]] || out="${stem}.${src_ext}"
+  same_fmt=1; need_size=""
+  notes="the painter's own ${src_ext}, untouched: no image ops here (no Pillow, no sips), so no conversion or resize; fix: python3 -m pip install --user pillow"
+  echo "grok-image: WARNING delivered ${notes}" >&2
+fi
 
 if [[ -z "$same_fmt" || -n "$need_size" ]]; then
   # Keep the untouched, C2PA-signed file; edits below lose the signature.
@@ -293,11 +293,11 @@ if [[ -n "$need_size" ]]; then
   if (( rw * sh != rh * sw )); then
     # Center-crop to the requested aspect first.
     if (( rw * sh > rh * sw )); then cw=$(( rh * sw / sh )); ch=$rh; else cw=$rw; ch=$(( rw * sh / sw )); fi
-    sips --cropToHeightWidth "$ch" "$cw" "$work" >/dev/null
+    python3 "$here/imgops" crop "$work" "$cw" "$ch"
     notes="center-cropped ${raw_dims} -> ${cw}x${ch}; "
     echo "grok-image: WARNING aspect: painter returned ${raw_dims} (asked ${aspect}); cropped to match ${size}" >&2
   fi
-  sips -z "$sh" "$sw" "$work" >/dev/null
+  python3 "$here/imgops" resize "$work" "$sw" "$sh"
   if (( sw > rw || sh > rh )); then
     notes="${notes}UPSCALED to ${size} locally (painter max for ${aspect} was ${raw_dims})"
     echo "grok-image: WARNING upscaled ${raw_dims} -> ${size}; detail is interpolated, not painted" >&2
@@ -310,8 +310,7 @@ if [[ -n "$same_fmt" ]]; then
   cp "$work" "$out"
 else
   case "$out_ext" in
-    png)  sips -s format png "$work" --out "$out" >/dev/null ;;
-    jpg|jpeg) sips -s format jpeg "$work" --out "$out" >/dev/null ;;
+    png|jpg|jpeg) python3 "$here/imgops" convert "$work" "$out" ;;
     *) echo "grok-image: WARNING unsupported output extension .${out_ext}; writing JPEG bytes" >&2; cp "$work" "$out" ;;
   esac
   notes="${notes:+$notes; }converted ${src_ext} -> ${out_ext}"

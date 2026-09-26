@@ -83,7 +83,7 @@ ref_files() {
 # Antigravity takes at most 3 references, so extra ones are dropped for it (with a note).
 paint() {  # paint <painter|auto> <prompt> <out> [painter args...]
   local want="$1" prompt="$2" out="$3"; shift 3
-  local tries rc p
+  local tries rc p got
   if [[ "$want" == auto ]]; then tries="$(connected)"; else tries="$want"; fi
   [[ -n "$tries" ]] || { say "no painter is connected. Run: subpowers doctor"; return 3; }
   for p in $tries; do
@@ -99,12 +99,15 @@ paint() {  # paint <painter|auto> <prompt> <out> [painter args...]
       args+=("$a")
     done
     if [[ "$p" == antigravity && $nref -gt 3 ]]; then say "antigravity takes 3 references; using the first 3 of $nref"; fi
+    # The painter prints the file it delivered, which keeps its real extension
+    # when this machine cannot convert it (no Pillow, no sips).
     set +e
-    bash "$here/${p}-image" "$prompt" "$out" ${args[@]+"${args[@]}"}
+    got="$(bash "$here/${p}-image" "$prompt" "$out" ${args[@]+"${args[@]}"})"
     rc=$?
     set -e
+    if [[ -n "$got" ]]; then echo "$got"; fi
     if [[ $rc -eq 0 ]]; then
-      python3 "$here/library" add "$out" >/dev/null || true   # index it; never fails the image
+      python3 "$here/library" add "${got:-$out}" >/dev/null || true   # index it; never fails the image
       return 0
     fi
     [[ $rc -eq 4 ]] && mark_off "$p"   # the plan lacks this feature (e.g. image gen not on this tier)
@@ -219,7 +222,11 @@ Photorealistic, evenly spaced, no text, no labels, no watermark."
     done < "$shots"
     for pid in ${pids[@]+"${pids[@]}"}; do wait "$pid" || say "a shot failed; continuing"; done
     [[ $n -gt 0 ]] || { say "the shot list is empty"; exit 2; }
-    have=(); for it in "${files[@]}"; do [[ -f "${it#*=}" ]] && have+=("$it"); done
+    have=()
+    for it in "${files[@]}"; do
+      f="${it#*=}"; [[ -f "$f" ]] || f="${f%.png}.jpg"   # delivered as jpg where nothing can convert it
+      [[ -f "$f" ]] && have+=("${it%%=*}=$f")
+    done
     say "${#have[@]} of $n shots painted"
     contact_sheet "$outdir/storyboard.jpg" ${have[@]+"${have[@]}"} >/dev/null
     if [[ -f "$outdir/storyboard.jpg" ]]; then echo "$outdir/storyboard.jpg"; else echo "$outdir"; fi
