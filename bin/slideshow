@@ -1,0 +1,93 @@
+#!/usr/bin/env python3
+"""slideshow: turn a few images into one looping slider (slide, fade or cut) that plays
+anywhere an image does (a GitHub README cannot run JavaScript, but it does play an
+animated WebP or GIF).
+
+Usage:
+  slideshow OUT.webp IMG1 IMG2 ... [--width 880] [--hold 2.6] [--transition slide|fade|cut]
+                    [--speed 0.35] [--fps 15] [--quality 72] [--still still.jpg]
+
+- Every image is center-cropped to the first image's shape, then resized to --width.
+- Each image holds for --hold seconds, then moves to the next over --speed seconds;
+  the last moves back to the first, so the loop is seamless. slide (default) pushes
+  the next image in from the right; fade blends them (its midpoint overlays two sets
+  of faces, so it suits scenery more than people); cut switches instantly.
+- --still also writes the first image as a small JPEG, for a reduced-motion fallback.
+- .webp is the default and the smallest; .gif works too (bigger, 256 colors).
+Prints the output path and its size. Needs Pillow.
+"""
+import argparse
+import os
+import sys
+
+try:
+    from PIL import Image, ImageOps
+except ImportError:
+    sys.exit("slideshow: needs Pillow (python3 -m pip install pillow)")
+
+
+def main():
+    ap = argparse.ArgumentParser(prog="slideshow")
+    ap.add_argument("out")
+    ap.add_argument("images", nargs="+")
+    ap.add_argument("--width", type=int, default=880)
+    ap.add_argument("--hold", type=float, default=2.6)
+    ap.add_argument("--transition", choices=["slide", "fade", "cut"], default="slide")
+    ap.add_argument("--speed", "--fade", dest="speed", type=float, default=0.35)
+    ap.add_argument("--fps", type=int, default=15)
+    ap.add_argument("--still")
+    ap.add_argument("--quality", type=int, default=72)
+    a = ap.parse_args()
+
+    if len(a.images) < 2:
+        sys.exit("slideshow: give at least two images")
+    for p in a.images:
+        if not os.path.isfile(p):
+            sys.exit(f"slideshow: missing image: {p}")
+
+    first = ImageOps.exif_transpose(Image.open(a.images[0]))
+    w = a.width
+    h = round(w * first.height / first.width)
+    slides = [ImageOps.fit(ImageOps.exif_transpose(Image.open(p)).convert("RGB"), (w, h), Image.LANCZOS)
+              for p in a.images]
+
+    frames, durations = [], []
+    steps = 0 if a.transition == "cut" else max(1, round(a.speed * a.fps))
+    step_ms = round(1000 / a.fps)
+    for i, s in enumerate(slides):
+        frames.append(s)
+        durations.append(round(a.hold * 1000))
+        nxt = slides[(i + 1) % len(slides)]
+        for k in range(1, steps + 1):
+            t = k / (steps + 1)
+            if a.transition == "fade":
+                frames.append(Image.blend(s, nxt, t))
+            else:  # slide: ease-in-out push from the right
+                e = 3 * t * t - 2 * t * t * t
+                x = round(w * e)
+                f = Image.new("RGB", (w, h))
+                f.paste(s, (-x, 0))
+                f.paste(nxt, (w - x, 0))
+                frames.append(f)
+            durations.append(step_ms)
+
+    os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
+    if a.out.lower().endswith(".gif"):
+        pal = [f.quantize(colors=256, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.FLOYDSTEINBERG) for f in frames]
+        pal[0].save(a.out, save_all=True, append_images=pal[1:], duration=durations, loop=0, optimize=True, disposal=1)
+    else:
+        frames[0].save(a.out, save_all=True, append_images=frames[1:], duration=durations, loop=0,
+                       quality=a.quality, method=6)
+
+    if a.still:
+        slides[0].save(a.still, quality=85)
+    size = os.path.getsize(a.out)
+    print(a.out)
+    print(f"slideshow: {len(slides)} images, {len(frames)} frames, {w}x{h}, "
+          f"{sum(durations) / 1000:.1f} s loop, {size / 1e6:.2f} MB", file=sys.stderr)
+    if size > 5_000_000:
+        print("slideshow: WARNING over 5 MB; READMEs load slowly. Try --width 720 or --quality 60.", file=sys.stderr)
+
+
+if __name__ == "__main__":
+    main()

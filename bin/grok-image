@@ -8,9 +8,12 @@
 # HOW IT WORKS (grok 1.0.41, read from the binary and measured 2026-09-26):
 #   painter  the CLI's built-in `image_gen` tool (text to image) or `image_edit`
 #            tool (image to image, used when --ref is given). Both call the
-#            xAI Imagine API through the grok.com session. There is no model
-#            argument: xAI picks the Imagine model server-side
-#            (features.image_gen_model_override empty = remote default).
+#            xAI Imagine API through the grok.com session. The tools have no
+#            model argument, but the CLI honors GROK_IMAGE_GEN_MODEL_OVERRIDE /
+#            GROK_IMAGE_EDIT_MODEL_OVERRIDE (proved 2026-09-26: a bogus id
+#            returns HTTP 404 "model ... does not exist"). This door asks for
+#            grok-imagine-image-quality, the quality Imagine model; an account
+#            without access to it is retried once on xAI's remote default.
 #            Evidence on file: every JPEG carries a C2PA manifest signed
 #            "xAI Grok Imagine", org SpaceXAI, trainedAlgorithmicMedia.
 #   driver   a Grok text model relays the prompt to the tool. It runs with ONLY
@@ -29,14 +32,31 @@
 #   --size    requested as the nearest aspect the tool accepts, then resized or
 #             center-cropped locally; the untouched signed JPEG is kept beside it.
 #   --ref     reference image(s) (a person's own photos, a product, a style frame).
-#             Repeatable. Switches the painter to image_edit.
+#             Repeatable. Switches the painter to image_edit, which paints in the
+#             first reference's shape; when --size asks for a different shape the
+#             first reference is padded to it (soft blurred fill) so the scene is
+#             painted wide instead of cropped and upscaled.
 #   --driver  pin the relay model (default: newest non-"fast" model `grok models` lists).
 #
-# Env: GROK_IMAGE_TIMEOUT (seconds, default 600), GROK_IMAGE_EFFORT (default low).
+# Env: GROK_IMAGE_TIMEOUT (seconds, default 600), GROK_IMAGE_EFFORT (default high),
+#      GROK_IMAGE_MODEL (default grok-imagine-image-quality; set it empty for
+#      xAI's remote default).
 #
 # Writes <out>.prompt.txt beside every image. Prints the output path on stdout;
 # provenance on stderr.
 set -euo pipefail
+
+# Per-user defaults: KEY=value lines in ~/.subpowers/config ($SUBPOWERS_HOME/config),
+# e.g. CHATGPT_IMAGE_DRIVERS=gpt-6-sol to keep a frontier model's quota free.
+# Only painter keys are read; a variable already set in the environment wins.
+sp_cfg="${SUBPOWERS_HOME:-$HOME/.subpowers}/config"
+if [[ -f "$sp_cfg" ]]; then
+  while IFS='=' read -r sp_k sp_v || [[ -n "$sp_k" ]]; do
+    [[ "$sp_k" =~ ^(CHATGPT|AGY|GROK)_IMAGE_[A-Z_]+$ ]] || continue
+    sp_v="${sp_v%\"}"; sp_v="${sp_v#\"}"
+    [[ -z "${!sp_k+x}" ]] && export "$sp_k=$sp_v"
+  done < "$sp_cfg"
+fi
 
 usage() { echo 'usage: grok-image "<prompt>" <out.jpg|png> [--size WxH] [--ref IMG]... [--driver MODEL]' >&2; exit 2; }
 [[ $# -lt 2 ]] && usage
@@ -78,8 +98,10 @@ fi
 if [[ -z "$driver" ]]; then
   driver="$(printf '%s\n' "$models_out" | sed -nE 's/^[[:space:]]*[-*][[:space:]]+([A-Za-z0-9._-]+).*/\1/p' | grep -vi fast | head -n 1 || true)"
 fi
-effort="${GROK_IMAGE_EFFORT:-low}"
+effort="${GROK_IMAGE_EFFORT:-high}"
 tmo="${GROK_IMAGE_TIMEOUT:-600}"
+# Quality Imagine model by default; GROK_IMAGE_MODEL="" means xAI's remote default.
+imodel="${GROK_IMAGE_MODEL-grok-imagine-image-quality}"
 
 mkdir -p "$(dirname "$out")" 2>/dev/null || true
 out_dir="$(cd "$(dirname "$out")" 2>/dev/null && pwd)" || {
@@ -105,7 +127,7 @@ PY
 fi
 
 # References: copied into the workdir (iPhone heic converted), passed as absolute paths.
-ref_list=""; n=0
+ref_list=""; n=0; ref_pad=""
 for r in ${refs[@]+"${refs[@]}"}; do
   n=$((n+1))
   ext="$(printf '%s' "${r##*.}" | tr '[:upper:]' '[:lower:]')"
@@ -113,6 +135,33 @@ for r in ${refs[@]+"${refs[@]}"}; do
     local_name="ref${n}.jpg"; sips -s format jpeg "$r" --out "$workdir/$local_name" >/dev/null
   else
     local_name="ref${n}.${ext}"; cp "$r" "$workdir/$local_name"
+  fi
+  # image_edit paints in the first reference's shape. Pad it to the asked shape
+  # (the photo centered on a darkened blur of itself) when they differ by >15%.
+  # Measured 2026-09-26: a portrait photo asked for 3:2 came back 928x1120 and
+  # had to be cropped then upscaled 1.65x; padded, it came back 1280x720 with the
+  # scene painted edge to edge. Needs Pillow; without it the photo goes as-is.
+  if [[ $n -eq 1 && "$aspect" != "auto" ]]; then
+    padded="$(python3 - "$workdir/$local_name" "$aspect" "$workdir/ref1-padded.jpg" 2>/dev/null <<'PY' || true
+import math, sys
+from PIL import Image, ImageFilter, ImageOps
+src, asp, dst = sys.argv[1], sys.argv[2], sys.argv[3]
+tw, th = (int(x) for x in asp.split(":"))
+im = ImageOps.exif_transpose(Image.open(src)).convert("RGB")
+if abs(math.log((im.width / im.height) / (tw / th))) < math.log(1.15): sys.exit()
+W = max(im.width, round(im.height * tw / th)); H = round(W * th / tw)
+if H < im.height: H = im.height; W = round(H * tw / th)
+bg = ImageOps.fit(im, (W, H)).filter(ImageFilter.GaussianBlur(max(W, H) // 25))
+bg = Image.blend(bg, Image.new("RGB", bg.size, (0, 0, 0)), 0.35)
+fg = ImageOps.contain(im, (W, H))
+bg.paste(fg, ((W - fg.width) // 2, (H - fg.height) // 2))
+bg.save(dst, quality=92)
+print(f"{im.width}x{im.height} -> {W}x{H}")
+PY
+)"
+    if [[ -n "$padded" ]]; then
+      local_name="ref1-padded.jpg"; ref_pad="first reference padded to ${aspect} (${padded})"
+    fi
   fi
   ref_list="${ref_list:+$ref_list, }\"$workdir/$local_name\""
 done
@@ -140,17 +189,23 @@ tcmd=(); command -v timeout >/dev/null 2>&1 && tcmd=(timeout "$tmo")
 margs=(); [[ -n "$driver" ]] && margs=(-m "$driver")
 
 t0=$(date +%s)
-set +e
-( cd "$workdir" && ${tcmd[@]+"${tcmd[@]}"} "${genv[@]}" grok --prompt-file "$workdir/task.txt" \
-    ${margs[@]+"${margs[@]}"} --effort "$effort" \
-    --tools "$tool" --allow "$tool" --disallowed-tools search_tool,use_tool \
-    --no-subagents --disable-web-search --output-format streaming-json --cwd "$workdir" \
-    </dev/null >"$log" 2>"$err" )
-rc=$?
-set -e
-wall=$(( $(date +%s) - t0 ))
+# One paint. $1 = Imagine model id for the CLI's override, "" = xAI's remote default.
+run_grok() {
+  local menv=(env -u GROK_IMAGE_GEN_MODEL_OVERRIDE -u GROK_IMAGE_EDIT_MODEL_OVERRIDE)
+  [[ -n "$1" ]] && menv=(env GROK_IMAGE_GEN_MODEL_OVERRIDE="$1" GROK_IMAGE_EDIT_MODEL_OVERRIDE="$1")
+  set +e
+  ( cd "$workdir" && ${tcmd[@]+"${tcmd[@]}"} "${menv[@]}" "${genv[@]}" grok --prompt-file "$workdir/task.txt" \
+      ${margs[@]+"${margs[@]}"} --effort "$effort" \
+      --tools "$tool" --allow "$tool" --disallowed-tools search_tool,use_tool \
+      --no-subagents --disable-web-search --output-format streaming-json --cwd "$workdir" \
+      </dev/null >"$log" 2>"$err" )
+  rc=$?
+  set -e
+  parse_stream
+}
 
 # Read what the tool itself reported: the call's input, its status, its saved path.
+parse_stream() {
 meta="$(python3 - "$log" "$tool" <<'PY'
 import json, sys
 path = sys.argv[1]; tool = sys.argv[2]
@@ -179,9 +234,21 @@ print(json.dumps({"saved": saved, "status": status, "error": error, "sent_prompt
                   "session": session, "calls": ncalls, "reply": "".join(texts)[-400:]}))
 PY
 )"
-field() { python3 -c 'import json,sys;print(json.loads(sys.argv[1])[sys.argv[2]])' "$meta" "$1"; }
 saved="$(field saved)"; status="$(field status)"; terr="$(field error)"; sent="$(field sent_prompt)"
 session="$(field session)"; ncalls="$(field calls)"
+}
+field() { python3 -c 'import json,sys;print(json.loads(sys.argv[1])[sys.argv[2]])' "$meta" "$1"; }
+
+run_grok "$imodel"
+imodel_note="${imodel:-xAI remote default}"
+if [[ -n "$imodel" && ( -z "$saved" || ! -f "$saved" ) ]] \
+   && printf '%s' "$terr" | grep -qiE 'does not exist|not have access|not.found'; then
+  # This account cannot use the quality model: paint once more on xAI's default.
+  echo "grok-image: ${imodel} unavailable on this account; retrying on xAI's default Imagine model" >&2
+  run_grok ""
+  imodel_note="xAI remote default (${imodel} unavailable on this account)"
+fi
+wall=$(( $(date +%s) - t0 ))
 
 if [[ -z "$saved" || ! -f "$saved" ]]; then
   if [[ -n "$terr" ]]; then
@@ -277,11 +344,11 @@ PY
   echo "  date: $(date '+%Y-%m-%d %H:%M:%S %z')"
   echo "  grok: $(grok --version 2>/dev/null | head -n 1)"
   echo "  auth: grok.com session (API-key auth disabled for this call)"
-  echo "  tool: ${tool} (xAI Imagine API, model chosen server-side)"
-  echo "  image model: Grok Imagine | C2PA says: ${c2pa}"
+  echo "  tool: ${tool} (xAI Imagine API)"
+  echo "  image model: ${imodel_note} | C2PA says: ${c2pa}"
   echo "  driver model: ${driver:-grok default} (reasoning ${effort})"
   echo "  prompt relayed verbatim: ${verbatim}"
-  echo "  references: ${n}${refs[0]+ ($(printf '%s ' "${refs[@]}"))}"
+  echo "  references: ${n}${refs[0]+ ($(printf '%s ' "${refs[@]}"))}${ref_pad:+; ${ref_pad}}"
   echo "  requested size: ${size:-model choice} (aspect asked: ${aspect})"
   echo "  painter size: ${raw_dims:-unknown}"
   echo "  delivered size: ${dims}${notes:+ (${notes})}"
@@ -290,6 +357,6 @@ PY
   echo "  bytes: ${bytes}"
 } > "${stem}.prompt.txt"
 
-echo "grok-image: painted by Grok Imagine (C2PA: ${c2pa}); tool=${tool}; driver=${driver:-default}; refs=${n}; size=${dims}; ${wall}s" >&2
+echo "grok-image: painted by Grok Imagine (C2PA: ${c2pa}); model=${imodel_note}; tool=${tool}; driver=${driver:-default} @${effort}; refs=${n}; size=${dims}; ${wall}s" >&2
 rm -rf "$workdir" 2>/dev/null || true   # only the temp folder this run created
 echo "$out"

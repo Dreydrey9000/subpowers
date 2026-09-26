@@ -32,7 +32,7 @@ subpowers doctor      # live-checks every painter and names the exact fix
 | Speed | 60 to 100 s | 17 to 40 s | 32 to 46 s |
 | Best at | text in images, precise product fidelity | fast drafts, likeness from references, photoreal | bold stylized looks, a third opinion |
 | Sizes | 1024x1024, 1536x1024, 1024x1536 exact; near shapes resized | 1:1, 2:3, 3:2, 3:4, 4:3, 9:16, 16:9 | 1:1, 16:9, 9:16, 3:2, 2:3 |
-| References | any number | up to 3 (extra ones dropped) | yes (image edit) |
+| References | any number | up to 3 (extra ones dropped) | yes (image edit; the first photo is padded to the asked shape so the scene paints wide) |
 | Needs | `codex login` with ChatGPT | `agy` signed in once | SuperGrok + `grok login` |
 
 `auto` uses the first connected painter and, if it fails (a paused plan, spent quota, a logged-out CLI), moves to the next one. A cancelled subscription never breaks anything: that painter just shows OFF in `subpowers powers` and is skipped.
@@ -45,8 +45,10 @@ subpowers doctor      # live-checks every painter and names the exact fix
 
 ## Prompts that work
 
-- Style anchor first ("isometric 3D render", "35mm photo"), then subject, composition, lighting, lens, materials, mood.
-- End with "no text, no letters" unless words are the point. Put real text on afterwards in code.
+- Stage it like a photographer: where the camera is and what lens, where the light comes from, who is where in the frame. Then the look ("unretouched behind-the-scenes photo on 35mm film", "isometric 3D render"). Then the moment ("laughing mid-conversation").
+- Photoreal people look AI-made when the prompt only says "beautiful". Add realism cues: natural skin texture with visible pores, real flyaway hairs, authentic fabric drape and creases, light that has a real source (a window, the low sun, a bounce off a white wall).
+- Make the physical scene possible. Say how many people, where each one sits or stands, and what the place has ("two separate front seats with a center console, a rear bench"). Vague group scenes come back with three people on one front seat.
+- Text: say exactly what lettering exists and nothing else ("the only lettering anywhere is the logo on each phone case: plain clothing without prints, no signs"). A bare "no text" still lets painters scatter slogans on cups, shirts and screens. Put long or exact text on afterwards in code.
 - Never name a model inside the prompt.
 
 ## Storyboards
@@ -57,10 +59,11 @@ Write the shot list yourself (one shot per line: framing, action, setting), save
 
 No painter makes video headlessly today. Grok Imagine video (image to video, 6 or 10 s) works through the Grok CLI once its video output bucket is configured (or `/privacy` is off); Google's Gemini Omni needs the Gemini app. If the user needs a clip now, say so and name those routes; never fake a video from stills.
 
-## Always the newest model
+## Always the best model
 
-- Painters are chosen server-side by OpenAI, Google and xAI on every call, so they cannot go stale.
-- The ChatGPT helper model comes from codex's own per-account model list, newest first; codex updates itself daily (`SUBPOWERS_NO_AUTOUPDATE=1` opts out). Antigravity uses the newest Gemini Flash in `agy models`; Grok the newest non-fast model in `grok models`.
+- Painters are chosen server-side by OpenAI, Google and xAI on every call, so they cannot go stale. Grok asks for xAI's quality Imagine model and falls back to xAI's default when a plan lacks it (the receipt names which one painted).
+- Helper models run at high effort (they write the prompt the painter sees). ChatGPT: codex's own per-account model list, newest first; codex updates itself daily (`SUBPOWERS_NO_AUTOUPDATE=1` opts out). Antigravity: the newest Gemini Flash at High. Grok: the newest non-fast model in `grok models`.
+- The user's own picks live in `~/.subpowers/config` (`KEY=value`: `CHATGPT_IMAGE_DRIVERS`, `CHATGPT_IMAGE_EFFORT`, `AGY_IMAGE_EFFORT`, `GROK_IMAGE_EFFORT`, `GROK_IMAGE_MODEL`). Respect them; don't override them with flags unless the user asks.
 
 ## Errors
 

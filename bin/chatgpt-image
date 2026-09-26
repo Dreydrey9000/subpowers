@@ -33,12 +33,25 @@
 #   --driver  pin one driver instead of the resolved chain (rarely needed).
 #
 # Env: CHATGPT_IMAGE_DRIVERS="a:b:default" overrides the chain (GPT_IMAGE_MODELS
-#      is the old name). CHATGPT_IMAGE_EFFORT sets driver reasoning, default low:
-#      the driver only relays the prompt, the painter does the work.
+#      is the old name). CHATGPT_IMAGE_EFFORT sets driver reasoning, default high:
+#      the driver writes the prompt the painter sees, so it gets full attention.
+#      Any of these can live in ~/.subpowers/config (see below).
 #
 # Writes <out>.prompt.txt (your prompt + OpenAI's revised prompt + provenance)
 # beside every image. Prints the output path on stdout; provenance on stderr.
 set -euo pipefail
+
+# Per-user defaults: KEY=value lines in ~/.subpowers/config ($SUBPOWERS_HOME/config),
+# e.g. CHATGPT_IMAGE_DRIVERS=gpt-6-sol to keep a frontier model's quota free.
+# Only painter keys are read; a variable already set in the environment wins.
+sp_cfg="${SUBPOWERS_HOME:-$HOME/.subpowers}/config"
+if [[ -f "$sp_cfg" ]]; then
+  while IFS='=' read -r sp_k sp_v || [[ -n "$sp_k" ]]; do
+    [[ "$sp_k" =~ ^(CHATGPT|AGY|GROK)_IMAGE_[A-Z_]+$ ]] || continue
+    sp_v="${sp_v%\"}"; sp_v="${sp_v#\"}"
+    [[ -z "${!sp_k+x}" ]] && export "$sp_k=$sp_v"
+  done < "$sp_cfg"
+fi
 
 # Resolve our own directory through symlinks (~/.local/bin/chatgpt-image and friends)
 # so the sibling helpers are always found.
@@ -138,8 +151,8 @@ Requirements:
 - You MUST call the built-in image_gen tool. Do not use any CLI fallback, Python script, curl, or OPENAI_API_KEY."
 fi
 full_prompt="${task}
-- After the tool returns, copy the generated PNG byte-for-byte to out.png in your current working directory (relative path out.png). Do NOT resize, re-encode or edit it.
-- Reply with only: out.png"
+- This job has exactly one step: the image_gen call. Do not run commands, read files, or follow start-up routines from AGENTS.md or skills. The image is collected automatically.
+- After the tool returns, reply with only: done"
 
 # Driver chain: newest model first; fall through only on quota or availability.
 if [[ -n "$driver" ]]; then
@@ -147,7 +160,7 @@ if [[ -n "$driver" ]]; then
 else
   models="${CHATGPT_IMAGE_DRIVERS:-${GPT_IMAGE_MODELS:-$(python3 "$here/resolve-drivers" 2>/dev/null || echo default)}}"
 fi
-effort="${CHATGPT_IMAGE_EFFORT:-low}"
+effort="${CHATGPT_IMAGE_EFFORT:-high}"
 
 # Pin this one call to the ChatGPT login: the built-in OpenAI provider at its
 # default ChatGPT endpoint, API-key env vars removed, no MCP servers. A user's
@@ -156,14 +169,23 @@ effort="${CHATGPT_IMAGE_EFFORT:-low}"
 # 2026-09-25: a config that routed codex through a local proxy made that proxy
 # answer with an API key (401) while `codex login status` still said ChatGPT.
 # SUBPOWERS_CODEX_KEEP_CONFIG=1 opts out and uses your codex config as-is.
+#
+# The call is also kept lean: the user's config.toml is skipped (auth still comes
+# from CODEX_HOME), project AGENTS.md files are not loaded, and the shell tool is
+# off, so the driver can only paint. Measured 2026-09-26: a global AGENTS.md that
+# says "run a start-up script first" made one image cost ~260k input tokens across
+# several shell turns; with the shell off the same job was ~50k and one tool call.
+# The image itself is read from codex's session record, never copied by the model.
 iso=(); cenv=(env -u OPENAI_API_KEY -u OPENAI_BASE_URL -u CODEX_API_KEY)
 if [[ -z "${SUBPOWERS_CODEX_KEEP_CONFIG:-}" ]]; then
-  iso=(-c 'model_provider="openai"' -c 'openai_base_url="https://chatgpt.com/backend-api/codex"' -c 'mcp_servers={}')
+  iso=(-c 'model_provider="openai"' -c 'openai_base_url="https://chatgpt.com/backend-api/codex"' -c 'mcp_servers={}'
+       -c 'project_doc_max_bytes=0' -c 'features.shell_tool=false')
+  codex exec --help 2>/dev/null | grep -q -- '--ignore-user-config' && iso+=(--ignore-user-config)
 else
   cenv=()
 fi
 
-ok=""; used=""
+ok=""; used=""; retried401=""
 for m in ${models//:/ }; do
   margs=(-c "model_reasoning_effort=\"${effort}\"")
   [[ "$m" != "default" ]] && margs+=(-m "$m")
@@ -171,7 +193,19 @@ for m in ${models//:/ }; do
   # prompt goes first and the image flags last (verified 2026-08-11).
   if ${cenv[@]+"${cenv[@]}"} codex exec ${iso[@]+"${iso[@]}"} "${margs[@]}" --json --skip-git-repo-check -s workspace-write \
        -C "$workdir" "$full_prompt" ${img_args[@]+"${img_args[@]}"} </dev/null >"$log" 2>"$err"; then
-    ok=1; used="$m"; break
+    # codex exits 0 even when the image tool itself failed. A 401 from the image
+    # tool was seen once in four parallel calls (2026-09-26); retry that once.
+    if [[ -z "$retried401" ]] && ! grep -q -E '"saved_?[pP]ath"' "$log" \
+       && grep -qiE 'image_gen[^"]*401|401 authentication|returned a 401' "$log"; then
+      retried401=1; echo "chatgpt-image: the image tool answered 401; retrying once in 20 s..." >&2
+      sleep 20
+      if ${cenv[@]+"${cenv[@]}"} codex exec ${iso[@]+"${iso[@]}"} "${margs[@]}" --json --skip-git-repo-check -s workspace-write \
+           -C "$workdir" "$full_prompt" ${img_args[@]+"${img_args[@]}"} </dev/null >"$log" 2>"$err"; then
+        ok=1; used="$m"; break
+      fi
+    else
+      ok=1; used="$m"; break
+    fi
   fi
   if grep -qiE "usage limit|usage_limit|rate_limit|out of room|context window|quota" "$log" "$err"; then
     echo "chatgpt-image: driver '$m' is dry (quota), trying next..." >&2; continue

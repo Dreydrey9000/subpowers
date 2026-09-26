@@ -19,7 +19,7 @@
 #            shows up the same day.
 #   driver   the chat model that calls the tool (`agy --model`), picked per call
 #            from `agy models`: the newest gemini-X-flash at AGY_IMAGE_EFFORT
-#            (default low; the driver only relays the prompt), then the next
+#            (default high, the strongest variant agy lists), then the next
 #            newest, then agy's default. Fall-through only on quota / capacity /
 #            unknown-model errors.
 #
@@ -53,6 +53,18 @@
 # beside every image. Prints the output path on stdout; provenance on stderr.
 # Exit codes: 2 usage, 3 not logged in, 75 lease busy, 127 agy missing, 1 other.
 set -euo pipefail
+
+# Per-user defaults: KEY=value lines in ~/.subpowers/config ($SUBPOWERS_HOME/config),
+# e.g. CHATGPT_IMAGE_DRIVERS=gpt-6-sol to keep a frontier model's quota free.
+# Only painter keys are read; a variable already set in the environment wins.
+sp_cfg="${SUBPOWERS_HOME:-$HOME/.subpowers}/config"
+if [[ -f "$sp_cfg" ]]; then
+  while IFS='=' read -r sp_k sp_v || [[ -n "$sp_k" ]]; do
+    [[ "$sp_k" =~ ^(CHATGPT|AGY|GROK)_IMAGE_[A-Z_]+$ ]] || continue
+    sp_v="${sp_v%\"}"; sp_v="${sp_v#\"}"
+    [[ -z "${!sp_k+x}" ]] && export "$sp_k=$sp_v"
+  done < "$sp_cfg"
+fi
 
 src="${BASH_SOURCE[0]}"
 while [[ -L "$src" ]]; do
@@ -152,7 +164,7 @@ if ! grep -qE '^gemini-[0-9]' <<<"$models_out"; then
   echo "(workdir kept: $root)" >&2
   exit 3
 fi
-effort="${AGY_IMAGE_EFFORT:-low}"
+effort="${AGY_IMAGE_EFFORT:-high}"
 if [[ -n "$driver" ]]; then
   chain="$driver"
 elif [[ -n "${AGY_IMAGE_DRIVERS:-}" ]]; then
@@ -168,7 +180,7 @@ for i in ids:
     if m: flash.setdefault(tuple(int(x) for x in m.group(1).split(".")), {})[m.group(2)] = i
 chain = []
 for v in sorted(flash, reverse=True)[:2]:
-    pick = flash[v].get(effort) or flash[v].get("low") or next(iter(flash[v].values()))
+    pick = flash[v].get(effort) or flash[v].get("high") or next(iter(flash[v].values()))
     chain.append(pick)
 chain.append("default")
 print(":".join(chain))

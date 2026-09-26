@@ -6,6 +6,8 @@
 #   subpowers sheet NAME out.png [--painter P|all]      character sheet (front, sides, 3/4, close-up)
 #   subpowers storyboard shots.txt OUTDIR [--refs NAME] [--painter P] [--size WxH] [--style "..."]
 #   subpowers refs add NAME IMG...  |  refs list [NAME]  |  refs path NAME
+#   subpowers slideshow OUT.webp IMG... [--width 880]    looping crossfade of your picks (a README "slider")
+#   subpowers library find [WORDS] [--painter P] [--tag k=v]  every image you made, with its tags
 #   subpowers doctor [--fix] [--smoke]  |  powers  |  update
 #
 # Painters (each runs on YOUR login, never an API key):
@@ -25,12 +27,38 @@ here="$(cd "$(dirname "$src")" && pwd)"
 HOME_DIR="${SUBPOWERS_HOME:-$HOME/.subpowers}"
 ORDER="chatgpt antigravity grok"
 
-usage() { sed -n '2,18p' "$here/subpowers" | sed 's/^# \{0,1\}//' >&2; exit "${1:-2}"; }
+usage() { sed -n '2,20p' "$here/subpowers" | sed 's/^# \{0,1\}//' >&2; exit "${1:-2}"; }
 say() { echo "subpowers: $*" >&2; }
 
 has_chatgpt() { command -v codex >/dev/null 2>&1 && codex login status 2>&1 | grep -qi chatgpt; }
-has_antigravity() { command -v agy >/dev/null 2>&1 || [[ -x "$HOME/.local/bin/agy" ]]; }
-has_grok() { command -v grok >/dev/null 2>&1; }
+# A plan counts as ON only when its CLI answers as logged in (installed is not enough:
+# a cancelled plan's CLI is still installed). Answers are cached for 10 minutes in
+# ~/.cache/subpowers so a fan-out checks once; a painter that reports the plan
+# feature is missing marks itself OFF there too.
+CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/subpowers"
+login_cached() {  # login_cached <painter> <check-fn>
+  local f="$CACHE_DIR/login-$1"
+  if [[ -n "$(find "$f" -mmin -10 2>/dev/null)" ]]; then [[ "$(cat "$f")" == on ]]; return; fi
+  mkdir -p "$CACHE_DIR"
+  if "$2"; then echo on >"$f"; else echo off >"$f"; return 1; fi
+}
+mark_off() { mkdir -p "$CACHE_DIR"; echo off >"$CACHE_DIR/login-$1"; }
+tmo() { if command -v timeout >/dev/null 2>&1; then timeout 45 "$@"; else "$@"; fi; }
+# Output is captured before grep: under pipefail, `cli | grep -q` fails when grep exits
+# early and the CLI dies of SIGPIPE, which read a logged-in plan as OFF (2026-09-26).
+chk_antigravity() {
+  local a o; a="$(command -v agy 2>/dev/null || echo "$HOME/.local/bin/agy")"
+  [[ -x "$a" ]] || return 1
+  o="$(cd "${TMPDIR:-/tmp}" && tmo "$a" models 2>&1)" || true
+  grep -q '^gemini-' <<<"$o"
+}
+chk_grok() {
+  local o; command -v grok >/dev/null 2>&1 || return 1
+  o="$(cd "${TMPDIR:-/tmp}" && tmo grok models 2>&1)" || true
+  grep -qi 'logged in with grok.com' <<<"$o"
+}
+has_antigravity() { login_cached antigravity chk_antigravity; }
+has_grok() { login_cached grok chk_grok; }
 has() { case "$1" in chatgpt) has_chatgpt ;; antigravity) has_antigravity ;; grok) has_grok ;; *) return 1 ;; esac; }
 connected() { local p out=""; for p in $ORDER; do has "$p" && out="$out $p"; done; echo "${out# }"; }
 norm_painter() {
@@ -73,7 +101,11 @@ paint() {  # paint <painter|auto> <prompt> <out> [painter args...]
     bash "$here/${p}-image" "$prompt" "$out" ${args[@]+"${args[@]}"}
     rc=$?
     set -e
-    [[ $rc -eq 0 ]] && return 0
+    if [[ $rc -eq 0 ]]; then
+      python3 "$here/library" add "$out" >/dev/null || true   # index it; never fails the image
+      return 0
+    fi
+    [[ $rc -eq 4 ]] && mark_off "$p"   # the plan lacks this feature (e.g. image gen not on this tier)
     [[ $rc -eq 2 ]] && return 2
     if [[ "$want" == auto ]]; then say "$p failed (exit $rc); trying the next painter"; else return $rc; fi
   done
@@ -129,6 +161,7 @@ case "$cmd" in
       auto|chatgpt|antigravity|grok) paint "$painter" "$prompt" "$out" ${args[@]+"${args[@]}"} ;;
       all)
         stem="${out%.*}"; ext="${out##*.}"; pids=(); labels=()
+        export SUBPOWERS_BATCH="${SUBPOWERS_BATCH:-$(date +%Y%m%d-%H%M%S)-$$}"
         for p in $(connected); do
           ( paint "$p" "$prompt" "${stem}-${p}.${ext}" ${args[@]+"${args[@]}"} ) &
           pids+=($!); labels+=("$p")
@@ -210,6 +243,8 @@ Photorealistic, evenly spaced, no text, no labels, no watermark."
       *) say "refs: add | list | path"; exit 2 ;;
     esac
     ;;
+  slideshow|slider) exec python3 "$here/slideshow" "$@" ;;
+  library|lib) exec python3 "$here/library" "$@" ;;
   doctor) exec bash "$here/doctor" "$@" ;;
   powers)
     for p in $ORDER; do

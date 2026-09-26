@@ -1,13 +1,16 @@
-<p align="center"><img src="assets/hero.jpg" alt="Three small robots painting at easels in a floating studio" width="100%"></p>
+<p align="center"><picture>
+  <source media="(prefers-reduced-motion: reduce)" srcset="assets/hero-still.jpg">
+  <img src="assets/hero-slider.webp" alt="Three friends making content around Los Angeles: selfies in a Tesla, a podcast, a loft shoot, the Venice boardwalk, a rooftop at night, a cafe. Their phone cases show Grok, ChatGPT and Google." width="100%">
+</picture></p>
+<p align="center"><sub>Your personal assistants, on your subscriptions. Every frame above was painted by <code>subpowers</code> on a ChatGPT plan, the same three (AI-generated) people kept consistent across six scenes with <code>--ref</code>. Logos belong to their owners; none of them endorse this.</sub></p>
 
 <h1 align="center">subpowers</h1>
 
 <p align="center"><b>The AI subscriptions you already pay for, as powers for every agent.</b><br>
-Power #1: your agents make images with your ChatGPT, Google AI or SuperGrok plan.<br>
-No API key. No per-image bill. A receipt with every image.</p>
+Your agents can now make images on the ChatGPT, Google or Grok plan you already pay for.<br>
+No API key. No per-image bill. A signed receipt with every image.</p>
 
-<p align="center">For vibe coders · content creators · business owners · innovators<br>
-Works with Claude Code, Codex, Cursor, Gemini CLI, and anything that can run a command.</p>
+<p align="center">Works with Claude Code, Codex, Cursor, Gemini CLI, and anything that can run a command.</p>
 
 ---
 
@@ -74,23 +77,23 @@ Every image below was made by subpowers on a normal subscription, and every capt
 
 ## Every image comes with a receipt
 
-AI images are about to get questioned everywhere. subpowers saves a plain-text receipt next to each one: your prompt, the prompt the model actually received, which model painted it, the tool's own signature (C2PA, signed by OpenAI or Google), sizes and timings. A real one, unedited except for the folder paths:
+AI images are about to get questioned everywhere. subpowers saves a plain-text receipt next to each one: your prompt, the prompt the model actually received, which model painted it, the tool's own signature (C2PA, signed by OpenAI or Google), sizes and timings. A real one, from the car frame in the hero above (folder paths trimmed):
 
 ```text
 PROMPT (as given):
-isometric 3D render of two small friendly robots high-fiving in front of a glowing laptop, confetti, ...
+Recreate the reference photo as the same moment: the same parked Tesla Model Y with the white interior, ...
+Change only how real the blonde and the brunette look. ...
 
 provenance:
-  door: antigravity-image (~/.claude/skills/subpowers/bin)
-  agy: 1.2.11
-  auth: Antigravity OAuth subscription, isolated profile, zero MCP servers, no API key
-  driver model: gemini-3.8-flash-low (chain: gemini-3.8-flash-low:gemini-3.7-flash-low:default; effort low)
-  image model: gemini-3.1-flash-image (Gemini 3.1 Flash Image = Nano Banana 2), chosen server-side by Antigravity
-  C2PA: Google C2PA Core Generator Library; actions: Created by Google Generative AI + Applied imperceptible SynthID watermark (signed by Google LLC)
-  generate_image calls: 1; tool time: 11.704083s; door wall: 23s
+  door: subpowers/bin/chatgpt-image
+  codex: codex-cli 0.157.0
+  driver model: gpt-6-sol (chain: gpt-6-sol:gpt-5.6-sol; reasoning high)
+  image model: OpenAI's current ChatGPT image model, chosen server-side | C2PA says: ChatGPT/gpt-image (signed by OpenAI)
+  references: 1 (car-chatgpt.png)
   requested size: 1536x1024
-  painter size: 1264x848 (jpg)
-  delivered size: 1536x1024 (center-cropped ... LOCAL UPSCALE: the painter's native size is 1264x848; signed original kept)
+  painter size: 1536x1024
+  delivered size: 1536x1024
+  image_gen saved_path: ~/.codex/generated_images/01a0db4a-.../exec-77922a9d-....png
 ```
 
 The receipt even tells you when an image was upscaled locally, so nothing gets passed off as something it isn't.
@@ -101,14 +104,22 @@ The receipt even tells you when an image was upscaled locally, so nothing gets p
 
 `subpowers doctor` checks every painter, your logins, and where your agents can find the skill, then prints the exact command for anything that's off. `subpowers doctor --smoke` makes one real test image per painter.
 
-## Always the newest model, without you touching anything
+## Always the best model, without you touching anything
 
 | Piece | How it stays current |
 |---|---|
-| The painters | OpenAI and Google pick the image model on their side on every call. Nothing on your machine names it, so it can't go stale. |
-| The ChatGPT helper model | Read fresh from codex's own list of models on *your* account, newest first, every call. Retiring models are skipped. |
+| The painters | OpenAI and Google pick the image model on their side on every call, so it can't go stale. Grok is asked for xAI's quality Imagine model (`grok-imagine-image-quality`); a plan without it falls back to xAI's default by itself. |
+| The helper models | The text model that hands your prompt to the painter runs at **high** effort on every plan, because it writes what the painter actually sees. ChatGPT: read fresh from codex's own model list on *your* account, newest first, retiring models skipped. Antigravity: the newest Gemini Flash at its High setting. Grok: the newest non-fast Grok model. |
 | The codex CLI | Checked once a day and updated automatically (turn off with `SUBPOWERS_NO_AUTOUPDATE=1`). |
-| The Antigravity helper model | The newest Gemini Flash that `agy models` lists. |
+
+**Your own picks** go in `~/.subpowers/config`, one `KEY=value` per line; anything you set in the shell still wins. For example, to keep the image helper off your most expensive model so its quota stays free for real work:
+
+```bash
+CHATGPT_IMAGE_DRIVERS=gpt-6-sol     # ChatGPT helper model chain, first one tried first
+CHATGPT_IMAGE_EFFORT=high           # low | medium | high | xhigh
+AGY_IMAGE_EFFORT=high               # low | medium | high
+GROK_IMAGE_MODEL=                   # empty = xAI's default Imagine model instead of the quality one
+```
 
 ## The three painters
 
@@ -139,6 +150,15 @@ subpowers storyboard shots.txt board/ --refs me --style "35mm, deep blue palette
 - **Storyboards:** write one shot per line (framing, action, setting). Frames paint in parallel and land in `storyboard.jpg` in order, with the same person in every shot.
 - **Cancel a plan, nothing breaks.** A paused subscription just shows OFF in `subpowers powers`, and `auto` moves to the next painter when one fails or runs out of quota.
 - **One rule for real people:** never pass a photo of someone *else* as a setting reference. The painters borrow faces from every reference. Describe the set in words instead.
+- **Same cast, new scene:** pass an earlier image with `--ref` and say "the same three people as in the reference". That is how the hero above stays consistent from the car to the podcast.
+
+```bash
+subpowers library find podcast                        # every image you have made, newest first, with its tags
+subpowers library find --painter grok --tag project=launch
+subpowers slideshow slider.webp a.png b.png c.png     # one looping crossfade of your picks (plays in any README)
+```
+
+- **Every image is indexed.** subpowers adds a line to `~/.subpowers/library.jsonl` for each image: where it is, the painter, the image model, the helper model and effort, the prompt, references, sizes and the C2PA signer, plus your own tags (`SUBPOWERS_TAGS=project=launch,cast=trio`). Nothing is copied. Want backups? Drop an executable script at `~/.subpowers/hooks/after-image` (it gets the image, its receipt and its id) and send them to B2, S3 or Drive.
 
 ## Use it everywhere
 
@@ -173,6 +193,7 @@ Never ask the user for an API key, and never put one in. subpowers only uses the
 - Images use your plan's normal usage limits; an image costs more of your allowance than a text message. If you run out, it says so and waits for the reset. It never switches to a paid API.
 - This rides on the official `codex` and `agy` command-line tools, not on a published image API, so providers can change behavior. The doctor and the daily codex update are there for exactly that.
 - Use your own login on your own machine. Don't share credentials or use this to resell access.
+- The people in the hero are AI-generated; they are not real. The phone-case logos show which plan painted what.
 - subpowers is an independent open-source project. ChatGPT and Codex are trademarks of OpenAI; Antigravity, Gemini and Nano Banana are trademarks of Google; Grok and Grok Imagine are trademarks of xAI. None of them made or endorses this.
 
 ## What's next: build it with us

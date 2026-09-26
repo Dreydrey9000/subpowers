@@ -18,6 +18,8 @@ subpowers turns subscriptions people already pay for into powers any agent can u
 - [x] Reference sets: `subpowers refs add NAME photos...`, then `--refs NAME` anywhere
 - [x] Character sheets: `subpowers sheet NAME out.png` (front, profiles, 3/4, back, face close-up)
 - [x] Storyboards: `subpowers storyboard shots.txt outdir --refs NAME`
+- [x] Best-quality defaults: every helper model at high effort, Grok on xAI's quality Imagine model (automatic fallback), reference photos padded to the asked shape
+- [x] Your own defaults in `~/.subpowers/config` (helper model, effort, image model)
 
 ## Next: the video power (`subpowers video`)
 
