@@ -134,7 +134,7 @@ The receipt also says when an image was cropped or upscaled on your machine.
 |---|---|---|---|
 | You need | a ChatGPT plan with Codex access + `codex login` | a Google AI plan with Antigravity + `agy` signed in | SuperGrok + the Grok CLI + `grok login` |
 | Model | OpenAI's current image model | Nano Banana 2 (Gemini 3.1 Flash Image) | Grok Imagine (quality model) |
-| Speed (measured) | 60 to 100 s | 40 to 120 s | 45 to 100 s |
+| Speed (measured) | 60 to 100 s | 20 to 120 s | 45 to 100 s |
 | Shapes | square, 3:2, 2:3 exact; others requested | 1:1, 2:3, 3:2, 3:4, 4:3, 9:16, 16:9 | 1:1, 16:9, 9:16, 3:2, 2:3 |
 | Reference photos | yes, any number | yes, up to 3 | yes (image edit) |
 
@@ -174,7 +174,7 @@ subpowers slideshow slider.webp a.png b.png c.png    # one looping slider of you
 |---|---|
 | The painters | OpenAI and Google pick the image model on their side on every call, so it can't go stale. Grok is asked for xAI's quality Imagine model (`grok-imagine-image-quality`); a plan without it falls back to xAI's default by itself. |
 | The helper models | The text model that hands your prompt to the painter runs at **high** effort, because it writes what the painter actually sees. ChatGPT: read fresh from codex's own model list on *your* account, newest first, retiring models skipped. Google: the newest Gemini Flash at its High setting. Grok: the newest non-fast Grok model. |
-| The codex CLI | Checked once a day and updated automatically (turn off with `SUBPOWERS_NO_AUTOUPDATE=1`). |
+| The codex CLI | Checked once a day and updated automatically. Turn it off with `SUBPOWERS_NO_AUTOUPDATE=1`, in your shell or in `~/.subpowers/config` (do this if Homebrew or npm manages your codex). |
 
 Your own picks go in `~/.subpowers/config`, one `KEY=value` per line; anything you set in the shell still wins. For example, to keep the image helper off your most expensive model so its quota stays free for real work:
 

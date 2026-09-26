@@ -578,6 +578,15 @@ check "exit 0 still (no automatic rollback)" exits 0
 check "loud warning names the break" has "$C/stderr" "WARNING codex .*broke the subpowers contract"
 check "warning names the missing flag" has "$C/stderr" "--json"
 check "warning names the rollback with the previous version" has "$C/stderr" "npm i -g @openai/codex@0\\.158\\.0"
+newcase "update-codex: the painter updates codex daily by default"
+run env -u SUBPOWERS_NO_AUTOUPDATE STUB_NPM_VERSION=0.158.0 bash "$bin/chatgpt-image" "a red mug" "$C/out/mug.png"
+check "exit 0" exits 0
+check "ran codex update" called '"codex"' '["update"]'
+newcase "update-codex: SUBPOWERS_NO_AUTOUPDATE=1 in ~/.subpowers/config turns it off"
+mkdir -p "$C/home/.subpowers"; printf 'SUBPOWERS_NO_AUTOUPDATE=1\n' >"$C/home/.subpowers/config"
+run env -u SUBPOWERS_NO_AUTOUPDATE STUB_NPM_VERSION=0.158.0 bash "$bin/chatgpt-image" "a red mug" "$C/out/mug.png"
+check "exit 0" exits 0
+check "no codex update" bash -c '! grep -F "\"codex\"" "$1" | grep -qF "[\"update\"]"' _ "$C/stub.log"
 
 echo "== install and help"
 newcase "install: a fresh machine with no CLIs"

@@ -17,7 +17,7 @@
 #
 # Painters (each runs on YOUR login, never an API key):
 #   chatgpt      OpenAI's current image model through the codex CLI (ChatGPT plan). 60-100 s.
-#   google       Google's Nano Banana 2 through the Antigravity CLI (Google AI plan). 40-120 s.
+#   google       Google's Nano Banana 2 through the Antigravity CLI (Google AI plan). 20-120 s.
 #                ("antigravity" is the same painter; both names work.)
 #   grok         xAI's Grok Imagine through the Grok CLI (SuperGrok plan). 45-100 s.
 # --painter auto (default): the first connected painter; if it fails (paused plan, quota), the next.
