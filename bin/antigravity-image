@@ -51,7 +51,8 @@
 #
 # Writes <out>.prompt.txt (your prompt + the prompt the tool received + provenance)
 # beside every image. Prints the output path on stdout; provenance on stderr.
-# Exit codes: 2 usage, 3 not logged in, 75 lease busy, 127 agy missing, 1 other.
+# Exit codes: 2 usage, 3 not logged in, 5 painted but not delivered, 75 lease busy,
+# 127 agy missing, 1 other.
 set -euo pipefail
 
 # Per-user defaults: KEY=value lines in ~/.subpowers/config ($SUBPOWERS_HOME/config),
@@ -324,6 +325,10 @@ if [[ -z "$img" || ! -f "$img" ]]; then
   tail -n 10 "$log" >&2; echo "(workdir kept: $root)" >&2
   exit 1
 fi
+# The plan has paid for this image: any failure from here on is a delivery failure,
+# exit 5, so bin/subpowers never paints it again on another plan.
+delivery_failed() { local rc=$?; (( rc == 0 )) && return 0; echo "$me: painted but not delivered (exit $rc); the painted file: $img" >&2; exit 5; }
+trap delivery_failed EXIT
 if [[ "$calls" == "0" ]]; then
   echo "$me: WARNING no generate_image call in the transcript; this file may not come from the image model." >&2
 elif [[ "$calls" != "1" ]]; then
@@ -439,7 +444,7 @@ fi
   [[ -n "$original" ]] && echo "  signed original: ${original}"
   echo "  agy conversation: ${cid}"
   echo "  bytes: ${bytes}"
-} > "${stem}.prompt.txt"
+} > "${stem}.prompt.txt" || exit 5   # bash 3.2 does not stop on a failed redirect of a { } group
 
 echo "$me: painted by ${painter_ids:-server-chosen model}; driver=${used}; refs=${n}; ${dims}; ${wall}s" >&2
 if [[ -z "${AGY_IMAGE_KEEP_WORKDIR:-}" ]]; then

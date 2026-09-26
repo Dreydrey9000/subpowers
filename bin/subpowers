@@ -112,6 +112,7 @@ paint() {  # paint <painter|auto> <prompt> <out> [painter args...]
     fi
     [[ $rc -eq 4 ]] && mark_off "$p"   # the plan lacks this feature (e.g. image gen not on this tier)
     [[ $rc -eq 2 ]] && return 2
+    [[ $rc -eq 5 ]] && return 5   # painted but not delivered: the plan already paid, never paint it twice
     if [[ "$want" == auto ]]; then say "$p failed (exit $rc); trying the next painter"; else return $rc; fi
   done
   say "every connected painter failed"; return 1
