@@ -7,7 +7,7 @@ One line per change, with the why. Newest first.
 ### Added
 - `subpowers --version` (also `version`, `-v`): prints the version and the git commit, so a bug report can say exactly what ran.
 - `docs/diagrams/architecture.md`: one diagram of how an image request flows from your agent to a saved file.
-- Tests for `--version`, the first two fixes below and the config opt-out (119 cases, up from 108).
+- Tests for `--version`, the first two fixes below, the config opt-out and empty-plan messages (128 cases, up from 108).
 
 ### Changed
 - One name for the Google painter in every doc: `google`. `antigravity` still works, so nothing breaks.
@@ -20,6 +20,7 @@ One line per change, with the why. Newest first.
 - The unknown-painter error listed `antigravity` and `all`; it now lists the names the README teaches: chatgpt, google, grok, council.
 - CONTRIBUTING's pre-PR check skipped `bin/grok-image` and the Python helpers.
 - `SUBPOWERS_NO_AUTOUPDATE=1` in `~/.subpowers/config` was ignored (the reader only took painter keys), so a Homebrew-managed codex could only opt out from the shell.
+- An empty Google or Grok plan said the image tool "may not have been called" or hinted at a policy refusal. Both now say `dry (quota)`: Google gives the reset time, Grok quotes its reason (e.g. `402 ... usage balance exhausted`). Seen live on 2026-09-26.
 - Google's speed range starts at 20 s: a real 1024x1024 run on 2026-09-26 took 20 s, below the old 40 s floor.
 
 ## [0.3.1] - 2026-09-25

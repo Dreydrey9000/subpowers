@@ -605,6 +605,23 @@ run bash "$bin/subpowers" --version
 check "exit 0" exits 0
 check "names the version" has "$C/stdout" "^subpowers [0-9]+\.[0-9]+\.[0-9]+"
 
+echo "== an empty plan says so"
+newcase "antigravity: the image tool is out of quota"
+run STUB_AGY_IMAGE_QUOTA=1 bash "$bin/antigravity-image" "a red mug" "$C/out/mug.png" --size 1024x1024
+check "exit 1" exits 1
+check "says dry (quota)" has "$C/stderr" "dry \\(quota\\)"
+check "says when it resets" has "$C/stderr" "resets in 3h57m27s"
+check "no never-called guess" hasnt "$C/stderr" "may not have been called"
+newcase "grok: the CLI usage balance is empty"
+run STUB_GROK_BALANCE=1 bash "$bin/grok-image" "a red mug" "$C/out/mug.png" --size 1024x1024
+check "exit 1" exits 1
+check "says dry (quota)" has "$C/stderr" "dry \\(quota\\)"
+check "quotes grok's reason" has "$C/stderr" "usage balance exhausted"
+check "no policy-refusal guess" hasnt "$C/stderr" "policy refusal"
+newcase "auto: an empty plan hands off to the next painter"
+run STUB_AGY_IMAGE_QUOTA=1 STUB_GROK_BALANCE=1 bash "$bin/subpowers" image "a red mug" "$C/out/mug.png" --painter auto
+check "exit 0" exits 0
+
 echo "== bad input gets a plain answer"
 printf 'a wide shot\n' >"$T/shots.txt"
 newcase "storyboard: a flag with no value"
