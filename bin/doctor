@@ -84,13 +84,18 @@ else
     else
       cenv=()
     fi
-    margs=(-c 'model_reasoning_effort="low"'); [[ "${chain%%:*}" != default ]] && margs+=(-m "${chain%%:*}")
     ldir="$(mktemp -d "${TMPDIR:-/tmp}/subpowers-live.XXXXXX")"
-    live="$(cd "$ldir" && perl -e 'alarm shift; exec @ARGV' "${SUBPOWERS_LIVE_TIMEOUT:-120}" \
-      ${cenv[@]+"${cenv[@]}"} codex exec ${iso[@]+"${iso[@]}"} "${margs[@]}" --json --skip-git-repo-check \
-      "Reply with exactly: pong" </dev/null 2>/dev/null || true)"
+    for m in ${chain//:/ }; do
+      margs=(-c 'model_reasoning_effort="low"'); [[ "$m" != default ]] && margs+=(-m "$m")
+      live="$(cd "$ldir" && perl -e 'alarm shift; exec @ARGV' "${SUBPOWERS_LIVE_TIMEOUT:-120}" \
+        ${cenv[@]+"${cenv[@]}"} codex exec ${iso[@]+"${iso[@]}"} "${margs[@]}" --json --skip-git-repo-check \
+        "Reply with exactly: pong" </dev/null 2>/dev/null || true)"
+      # Like chatgpt-image: the next helper only when this one is dry or unavailable.
+      grep -q '"turn.completed"' <<<"$live" && break
+      grep -qiE 'usage limit|usage_limit|rate_limit|quota|model_not_found|does not exist|not supported|unsupported model|not available|newer version' <<<"$live" || break
+    done
     if grep -q '"turn.completed"' <<<"$live"; then
-      pass "live check: ChatGPT answered a real request"
+      pass "live check: ChatGPT answered a real request (helper: $m)"
     else
       why="$(printf '%s\n' "$live" | python3 -c '
 import json, re, sys
