@@ -29,6 +29,7 @@ INDEX = os.path.join(HOME, "library.jsonl")
 FIELDS = {  # receipt line prefix -> row key (the three painters write slightly different receipts)
     "driver model": "driver",
     "image model": "image_model",
+    "image model requested": "image_model",  # grok: the override it asked for; xAI does not report the answering model
     "C2PA": "c2pa",
     "requested size": "requested_size",
     "delivered size": "delivered_size",

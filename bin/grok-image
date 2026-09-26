@@ -352,7 +352,7 @@ PY
   echo "  grok: $(grok --version 2>/dev/null | head -n 1)"
   echo "  auth: grok.com session (API-key auth disabled for this call)"
   echo "  tool: ${tool} (xAI Imagine API)"
-  echo "  image model: ${imodel_note} | C2PA says: ${c2pa}"
+  echo "  image model requested: ${imodel_note} | C2PA says: ${c2pa}"
   echo "  driver model: ${driver:-grok default} (reasoning ${effort})"
   echo "  prompt relayed verbatim: ${verbatim}"
   echo "  references: ${n}${refs[0]+ ($(printf '%s ' "${refs[@]}"))}${ref_pad:+; ${ref_pad}}"
@@ -364,6 +364,6 @@ PY
   echo "  bytes: ${bytes}"
 } > "${stem}.prompt.txt" || exit 5   # bash 3.2 does not stop on a failed redirect of a { } group
 
-echo "grok-image: painted by Grok Imagine (C2PA: ${c2pa}); model=${imodel_note}; tool=${tool}; driver=${driver:-default} @${effort}; refs=${n}; size=${dims}; ${wall}s" >&2
+echo "grok-image: painted by Grok Imagine (C2PA: ${c2pa}); model requested=${imodel_note}; tool=${tool}; driver=${driver:-default} @${effort}; refs=${n}; size=${dims}; ${wall}s" >&2
 rm -rf "$workdir" 2>/dev/null || true   # only the temp folder this run created
 echo "$out"
