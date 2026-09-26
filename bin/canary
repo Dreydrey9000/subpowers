@@ -1,0 +1,413 @@
+#!/usr/bin/env python3
+"""canary: subpowers' drift radar.
+
+The painters ride on vendor CLIs (codex, agy, grok) that can change under us.
+This script notices: for every installed CLI it records the version and checks
+every item of tests/contract.json (each flag the painters pass, each output
+string they parse) against that CLI's own --help / --version / models / login
+output, then compares with the previous run.
+
+Usage:
+  subpowers canary [--live] [--json] [--notify] [--only CLI]
+  subpowers canary --install-launchagent     daily 07:15 check, loaded into launchd
+  subpowers canary --uninstall-launchagent   remove it again
+
+  --live    also run `subpowers doctor` (one tiny real ChatGPT request, no image)
+  --json    print machine-readable JSON on stdout instead of the report
+  --notify  on drift, send a macOS notification (osascript); no-op elsewhere
+  --only    check just one CLI (codex | agy | grok); update-codex uses this
+
+Exit 0 no drift, 1 drift, 2 usage. It never posts to GitHub or touches any
+network itself: on drift it writes a local report with a ready-to-paste issue
+body under $SUBPOWERS_HOME/canary/ and prints its path. Probes run with the
+same API-key scrubbing the painters use, so a stray key in the environment can
+never turn a check into a billed call.
+"""
+import datetime
+import glob
+import json
+import os
+import platform
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+
+HERE = os.path.dirname(os.path.realpath(__file__))          # .../bin
+ROOT = os.path.dirname(HERE)                                 # the skill root
+CONTRACT = os.path.join(ROOT, "tests", "contract.json")
+SP_HOME = os.environ.get("SUBPOWERS_HOME") or os.path.join(os.path.expanduser("~"), ".subpowers")
+CANARY_DIR = os.path.join(SP_HOME, "canary")
+STATE = os.path.join(CANARY_DIR, "state.json")
+PROBE_TIMEOUT = 90
+LAUNCHAGENT = "com.subpowers.canary"
+# What each CLI must NOT see, so a probe can never auth as an API key (same
+# lists the painters use).
+SCRUB = {
+    "codex": (["OPENAI_API_KEY", "OPENAI_BASE_URL", "CODEX_API_KEY"], {}),
+    "agy": (["GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_GENAI_USE_VERTEXAI",
+             "GOOGLE_APPLICATION_CREDENTIALS", "GOOGLE_CLOUD_PROJECT"], {}),
+    "grok": (["XAI_API_KEY", "GROK_CODE_XAI_API_KEY"], {"GROK_DISABLE_API_KEY_AUTH": "1"}),
+}
+
+
+def usage(msg=""):
+    if msg:
+        print(f"canary: {msg}", file=sys.stderr)
+    print("usage: subpowers canary [--live] [--json] [--notify] [--only CLI] | "
+          "--install-launchagent | --uninstall-launchagent", file=sys.stderr)
+    sys.exit(2)
+
+
+def find_cli(cli):
+    """The painter's own lookup order: PATH first, then the known install spot."""
+    p = shutil.which(cli)
+    if p:
+        return p
+    if cli == "agy":
+        p = os.path.join(os.path.expanduser("~"), ".local", "bin", "agy")
+        if os.path.isfile(p) and os.access(p, os.X_OK):
+            return p
+    return None
+
+
+def probe(path, argv, cli):
+    """Run one probe; returns (ok, combined_output, error_note)."""
+    drop, extra = SCRUB.get(cli, ([], {}))
+    env = {k: v for k, v in os.environ.items() if k not in drop}
+    env.update(extra)
+    argv = list(argv)
+    for i, a in enumerate(argv):
+        if isinstance(a, dict) and "$tmpdir" in a:            # contract placeholder
+            d = tempfile.mkdtemp(prefix="subpowers-canary.")
+            argv[i] = d
+            break
+    try:
+        r = subprocess.run([path] + argv, capture_output=True, text=True, timeout=PROBE_TIMEOUT, env=env)
+        return (r.returncode == 0), (r.stdout or "") + (r.stderr or ""), None
+    except subprocess.TimeoutExpired:
+        return False, "", f"no answer within {PROBE_TIMEOUT} s"
+    except OSError as e:
+        return False, "", f"could not run: {e}"
+
+
+def item_holds(item, out, rc0):
+    kind = [k for k in ("flag", "string", "istring", "regex", "exit0") if k in item]
+    if not kind:
+        return False, "contract item has no check"
+    k = kind[0]
+    if k == "exit0":
+        return rc0, None
+    v = item[k]
+    if k == "flag":      # its own token, never inside a longer flag or word
+        return re.search(r"(?<![\w-])" + re.escape(v) + r"(?![\w-])", out) is not None, None
+    if k == "string":
+        return v in out, None
+    if k == "istring":
+        return v.lower() in out.lower(), None
+    return re.search(v, out) is not None, None
+
+
+def load_state():
+    try:
+        with open(STATE) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {"canary": 1, "runs": 0, "clis": {}}
+
+
+def save_state(state):
+    os.makedirs(CANARY_DIR, exist_ok=True)
+    tmp = STATE + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(state, f, indent=1, sort_keys=True)
+    os.replace(tmp, STATE)
+
+
+def drift_file_text(results, when):
+    lines = [f"# vendor drift: " + ", ".join(
+        f"{c} {r['version'] or '?'}" + (f" (was {r['prev_version']})" if r["prev_version"] else "")
+        for c, r in results.items() if r["missing"]), "",
+        f"Detected by `subpowers canary` on {when}.",
+        f"State: `{STATE}`  Contract: `tests/contract.json`  Machine: {platform.system()} "
+        f"({sys.platform}).", ""]
+    for c, r in results.items():
+        if not r["missing"] and not r["version_changed"]:
+            continue
+        if r["missing"]:
+            lines.append(f"## What is missing from {c} {r['version'] or '(version unknown)'}")
+            lines += [f"- {m}" for m in r["missing"]]
+            lines.append("")
+        if r["version_changed"]:
+            lines.append(f"## {c} version changed")
+            lines.append(f"- {r['prev_version']} -> {r['version']}")
+            lines.append("")
+    lines += ["## Ready-to-paste issue (label: vendor-drift)", "",
+              "    **Label:** vendor-drift", ""]
+    for c, r in results.items():
+        if not r["missing"]:
+            continue
+        lines.append(f"    **CLI:** {c} {r['version'] or '?'}"
+                     + (f" (was {r['prev_version']})" if r["prev_version"] else ""))
+        lines.append("    **What broke:**")
+        lines += [f"      {m.replace(chr(96), '')}" for m in r["missing"]]
+        lines.append("    **subpowers code that depends on it:** see the drift report fields above")
+        lines.append("    **Reproduce:** `subpowers canary`")
+        lines.append("")
+    lines += ["(This file stays on this machine. subpowers never posts to GitHub or any network.)", ""]
+    return "\n".join(lines)
+
+
+def notify(msg):
+    if sys.platform != "darwin":
+        return
+    osa = shutil.which("osascript")
+    if not osa:
+        return
+    msg = msg.replace('"', "'")
+    try:
+        subprocess.run([osa, "-e", f'display notification "{msg}" with title "subpowers canary"'],
+                       capture_output=True, timeout=15)
+    except (OSError, subprocess.SubprocessError):
+        pass                                    # a missed notification never fails the check
+
+
+def run_launchctl(*argv):
+    lt = shutil.which("launchctl")
+    if not lt:
+        return None
+    try:
+        return subprocess.run([lt] + list(argv), capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError) as e:
+        print(f"canary: launchctl {' '.join(argv[:1])} failed: {e}", file=sys.stderr)
+        return None
+
+
+def install_launchagent():
+    import plistlib
+    uid = os.getuid()
+    plist = os.path.join(os.path.expanduser("~"), "Library", "LaunchAgents", LAUNCHAGENT + ".plist")
+    os.makedirs(os.path.dirname(plist), exist_ok=True)
+    os.makedirs(CANARY_DIR, exist_ok=True)
+    log = os.path.join(CANARY_DIR, "launchd.log")
+    home = os.path.expanduser("~")
+    spec = {
+        "Label": LAUNCHAGENT,
+        # The python3 that is running this very canary, so the agent never
+        # depends on PATH to find one.
+        "ProgramArguments": [sys.executable, os.path.realpath(__file__), "--live", "--notify"],
+        "EnvironmentVariables": {"PATH": os.pathsep.join([
+            os.path.join(home, ".local", "bin"), "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"])},
+        "StartCalendarInterval": {"Hour": 7, "Minute": 15},
+        "StandardOutPath": log,
+        "StandardErrorPath": log,
+    }
+    with open(plist, "wb") as f:
+        plistlib.dump(spec, f)
+    run_launchctl("bootout", f"gui/{uid}/{LAUNCHAGENT}")            # idempotent reload
+    r = run_launchctl("bootstrap", f"gui/{uid}", plist)
+    loaded = r is not None and r.returncode == 0
+    if r is not None and not loaded:
+        print((r.stderr or r.stdout or "").strip(), file=sys.stderr)
+    print(f"canary: wrote {plist}")
+    print(f"canary: daily 07:15 run of {os.path.basename(__file__)} --live --notify, log: {log}")
+    print("canary: launchd agent " + ("loaded (gui/%d)" % uid if loaded
+                                      else "NOT loaded (launchctl not found or refused; the plist is in place)"))
+    return 0
+
+
+def uninstall_launchagent():
+    uid = os.getuid()
+    run_launchctl("bootout", f"gui/{uid}/{LAUNCHAGENT}")
+    plist = os.path.join(os.path.expanduser("~"), "Library", "LaunchAgents", LAUNCHAGENT + ".plist")
+    if os.path.exists(plist):
+        os.remove(plist)
+        print(f"canary: removed {plist}")
+    else:
+        print(f"canary: {plist} was not there (nothing to do)")
+    return 0
+
+
+def main():
+    args = sys.argv[1:]
+    live = json_out = notify_on_drift = False
+    only = None
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a == "--live":
+            live = True
+        elif a == "--json":
+            json_out = True
+        elif a == "--notify":
+            notify_on_drift = True
+        elif a == "--only":
+            i += 1
+            if i >= len(args):
+                usage("--only wants a CLI name after it")
+            only = args[i]
+        elif a.startswith("--only="):
+            only = a.split("=", 1)[1]
+        elif a in ("-h", "--help"):
+            print(__doc__)
+            return 0
+        elif a == "--install-launchagent":
+            return install_launchagent()
+        elif a == "--uninstall-launchagent":
+            return uninstall_launchagent()
+        else:
+            usage(f"unknown argument: {a}")
+        i += 1
+
+    try:
+        with open(CONTRACT) as f:
+            contract = json.load(f)
+    except (OSError, ValueError) as e:
+        print(f"canary: cannot read the contract ({CONTRACT}): {e}", file=sys.stderr)
+        return 2
+    clis = contract.get("clis", {})
+    if only:
+        if only not in clis:
+            usage(f"--only wants one of: {', '.join(clis)}")
+        clis = {only: clis[only]}
+
+    state = load_state()
+    prev = state.get("clis", {})
+    when = datetime.datetime.now()
+    results = {}
+    for cli, spec in clis.items():
+        path = find_cli(cli)
+        r = {"installed": bool(path), "path": path, "version": None, "prev_version": None,
+             "version_changed": False, "items_total": len(spec.get("items", [])),
+             "items_ok": 0, "missing": [], "notes": []}
+        p = (prev.get(cli) or {})
+        if not path:
+            r["notes"].append("not installed; skipped (subpowers works with any subset of painters)")
+            if p.get("version"):
+                r["notes"].append(f"it was here before, version {p['version']}")
+            results[cli] = r
+            continue
+        ok0, out, err = probe(path, spec["version"]["probe"], cli)
+        m = re.search(spec["version"]["regex"], out) if ok0 or out else None
+        r["version"] = m.group(0) if m else None
+        r["prev_version"] = p.get("version")
+        if r["version"] is None:
+            r["missing"].append(f"`{cli} --version` did not answer a version"
+                                + (f" ({err})" if err else ""))
+        elif r["prev_version"] and r["prev_version"] != r["version"]:
+            r["version_changed"] = True
+        outs = {}
+        for item in spec.get("items", []):
+            key = " ".join(str(x) for x in item["probe"])
+            if key not in outs:
+                outs[key] = probe(path, list(item["probe"]), cli)
+            rc0, out, err = outs[key]
+            holds, why_bad = item_holds(item, out, rc0)
+            if holds:
+                r["items_ok"] += 1
+            else:
+                shown = " ".join(str(x) for x in item["probe"])
+                if why_bad:
+                    r["missing"].append(why_bad + f" ({item['id']})")
+                elif err:
+                    r["missing"].append(f"`{cli} {' '.join(str(x) for x in item['probe'])}` {err} "
+                                        f"({item['id']}; {item['why']})")
+                else:
+                    want = item.get("flag") or item.get("string") or item.get("istring") or item.get("regex")
+                    r["missing"].append(f"`{cli} {shown}` no longer carries {item_kind(item)} {want} "
+                                        f"({item['why']})")
+        results[cli] = r
+
+    drift = any(r["missing"] for r in results.values())
+    changed = [c for c, r in results.items() if r["version_changed"]]
+    doctor = None
+    if live:
+        try:
+            d = subprocess.run(["bash", os.path.join(HERE, "doctor")], capture_output=True,
+                               text=True, timeout=420)
+            ready = [w for w in re.findall(r"READY: your agents can make images with: (.+)", d.stdout or "")]
+            doctor = {"exit": d.returncode, "ready": ready[0].split() if ready else []}
+            if not json_out:
+                tail = "\n".join((d.stdout or "").splitlines()[-4:])
+                if tail:
+                    print(tail, file=sys.stderr)
+        except (OSError, subprocess.SubprocessError) as e:
+            doctor = {"exit": None, "ready": [], "error": str(e)}
+
+    # State: what ran now is the new baseline (merged when --only narrowed the run).
+    for cli, r in results.items():
+        prev[cli] = {"version": r["version"], "path": r["path"], "ok": not r["missing"],
+                     "items_ok": r["items_ok"], "items_total": r["items_total"],
+                     "checked_at": when.strftime("%Y-%m-%dT%H:%M:%S")}
+    state = {"canary": 1, "runs": state.get("runs", 0) + 1, "clis": prev,
+             "updated": when.strftime("%Y-%m-%dT%H:%M:%S")}
+    save_state(state)
+
+    drift_path = None
+    if drift:
+        os.makedirs(CANARY_DIR, exist_ok=True)
+        day = when.strftime("%Y-%m-%d")
+        drift_path = os.path.join(CANARY_DIR, f"drift-{day}.md")
+        text = drift_file_text(results, when.strftime("%Y-%m-%d %H:%M:%S"))
+        if os.path.exists(drift_path):                       # same day, another run: keep both
+            with open(drift_path, "a") as f:
+                f.write("\n---\n\n" + text)
+        else:
+            with open(drift_path, "w") as f:
+                f.write(text)
+
+    code = 1 if drift else 0
+    if json_out:
+        payload = {"canary": 1, "checked_at": when.strftime("%Y-%m-%dT%H:%M:%S"),
+                   "contract": "tests/contract.json", "status": "drift" if drift else "ok",
+                   "exit": code, "state": STATE, "drift_file": drift_path,
+                   "doctor": doctor, "clis": results}
+        print(json.dumps(payload, indent=1))
+    else:
+        print(f"subpowers canary  {when.strftime('%Y-%m-%d %H:%M:%S')}   "
+              f"contract tests/contract.json v{contract.get('version', '?')}   state {STATE}")
+        for cli, r in results.items():
+            if not r["installed"]:
+                note = "; ".join(r["notes"])
+                print(f"{cli:<5} (absent)   {note}")
+                continue
+            mark = "DRIFT" if r["missing"] else "OK"
+            print(f"{cli:<5} {r['version'] or '?':<9} {r['items_ok']}/{r['items_total']:<3} {mark}"
+                  + (f"   {r['prev_version']} -> {r['version']} (version changed)" if r["version_changed"] else ""))
+            for n in r["notes"]:
+                print(f"      {n}")
+            for m in r["missing"]:
+                print(f"DRIFT {cli} {r['version'] or '(version unknown)'}"
+                      + (f" (was {r['prev_version']})" if r["prev_version"] else "") + f": {m}")
+        if doctor is not None:
+            if doctor.get("ready"):
+                print(f"doctor: READY ({', '.join(doctor['ready'])})")
+            else:
+                print(f"doctor: NOT READY (exit {doctor.get('exit')}); see its output in the log")
+        if drift:
+            n_missing = sum(len(r["missing"]) for r in results.values())
+            print(f"drift report written: {drift_path}")
+            print(f"DRIFT: {n_missing} contract item(s) missing. Run: subpowers doctor "
+                  f"(and read the report; it has a ready-to-paste issue body).")
+        else:
+            n_clis = sum(1 for r in results.values() if r["installed"])
+            n_items = sum(r["items_ok"] for r in results.values())
+            extra = f", {len(changed)} version change(s)" if changed else ""
+            print(f"OK: no drift ({n_clis} CLIs checked, {n_items} items{extra}).")
+    if drift and notify_on_drift:
+        first = next((f"{c}: {r['missing'][0]}" for c, r in results.items() if r["missing"]), "drift")
+        notify(first[:180])
+    return code
+
+
+def item_kind(item):
+    for k in ("flag", "string", "istring", "regex", "exit0"):
+        if k in item:
+            return {"flag": "flag", "string": "string", "istring": "string",
+                    "regex": "pattern", "exit0": "a 0 exit"}[k]
+    return "item"
+
+
+if __name__ == "__main__":
+    sys.exit(main())

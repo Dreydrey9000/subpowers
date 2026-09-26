@@ -9,6 +9,7 @@
 #   subpowers slideshow OUT.webp IMG... [--width 880]    looping slider of your picks (plays in any README)
 #   subpowers library find [WORDS] [--painter P] [--tag k=v]  every image you made, with its tags
 #   subpowers doctor [--fix] [--smoke]  |  powers  |  update
+#   subpowers canary [--live] [--json] [--notify]  drift radar (vendor CLIs changing); --install-launchagent
 #
 # Painters (each runs on YOUR login, never an API key):
 #   chatgpt      OpenAI's current image model through the codex CLI (ChatGPT plan). 60-100 s.
@@ -269,6 +270,7 @@ Photorealistic, evenly spaced, no text, no labels, no watermark."
     ;;
   slideshow|slider) exec python3 "$here/slideshow" "$@" ;;
   library|lib) exec python3 "$here/library" "$@" ;;
+  canary) exec python3 "$here/canary" "$@" ;;
   doctor) exec bash "$here/doctor" "$@" ;;
   powers)
     for p in $ORDER; do
