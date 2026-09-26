@@ -49,6 +49,8 @@ else fail "python3 missing -> xcode-select --install (macOS) or install Python 3
 ops="$(python3 "$here/imgops" backend 2>/dev/null)"
 if [[ "$ops" == pillow || "$ops" == sips ]]; then pass "image ops: $ops (exact --size and format conversion work)"
 else warn "no image ops (no Pillow, no sips): images arrive in the painter's own format and size -> python3 -m pip install --user pillow"; fi
+if python3 -c 'import PIL' >/dev/null 2>&1; then pass "Pillow $(python3 -c 'import PIL; print(PIL.__version__)' 2>/dev/null) (council side-by-side sheet, slideshow, grok reference padding)"
+else warn "Pillow missing: painting works, but the council side-by-side sheet, slideshow and grok reference padding need it -> python3 -m pip install --user pillow"; fi
 
 echo "ChatGPT painter (OpenAI image model, your ChatGPT plan)"
 if ! command -v codex >/dev/null 2>&1; then
