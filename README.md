@@ -106,7 +106,7 @@ The receipt also says when an image was cropped or upscaled locally, so nothing 
 
 ## It tells you exactly what's wrong
 
-<p align="center"><img src="assets/doctor.png" alt="subpowers doctor output: every check passing" width="90%"></p>
+<p align="center"><img src="assets/doctor.png" alt="subpowers doctor, trimmed: the ChatGPT, Google and Grok painters each pass, then READY: your agents can make images with chatgpt, antigravity and grok" width="90%"></p>
 
 `subpowers doctor` checks every painter, your logins, and where your agents can find the skill, then prints the exact command for anything that's off. `subpowers doctor --smoke` makes one real test image per painter.
 
