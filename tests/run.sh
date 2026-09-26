@@ -69,6 +69,10 @@ img() {  # img PATH FORMAT WxH
 f, w, h = fakeimg.dims(sys.argv[2]); print("%s %dx%d" % (f, w, h))' "$stubs" "$1" 2>/dev/null || echo missing)"
   [[ "$got" == "$2 $3" ]] || { echo "        $(basename "$1") is $got"; return 1; }
 }
+magic() {  # magic PATH HEX: the file starts with these bytes
+  local got; got="$(python3 -c 'import sys; print(open(sys.argv[1], "rb").read(3).hex())' "$1" 2>/dev/null || echo missing)"
+  [[ "$got" == "$2" ]] || { echo "        $(basename "$1") starts with $got"; return 1; }
+}
 printed() { [[ "$(tail -n 1 "$C/stdout")" == "$1" ]] || { echo "        printed: $(tail -n 1 "$C/stdout")"; return 1; }; }
 called() { local m; m="$(grep -F -- "$1" "$C/stub.log")"; grep -qF -- "$2" <<<"$m"; }   # called <a stub call matching> <that also has>
 pillow() { env -i HOME="$T" PATH="$P" ${PYP:+"PYTHONPATH=$PYP"} python3 -c 'import PIL' 2>/dev/null; }   # as the cases see it: no user site-packages
@@ -92,6 +96,21 @@ newcase "chatgpt: a helper that burns 200k input tokens is flagged"
 run STUB_CODEX_INPUT_TOKENS=200000 bash "$bin/chatgpt-image" "a red mug" "$C/out/mug.png"
 check "exit 0" exits 0
 check "warns on stderr" has "$C/stderr" "the helper did more than paint"
+
+newcase "chatgpt: a .jpg ask delivers JPEG bytes"
+run bash "$bin/chatgpt-image" "a red mug" "$C/out/mug.jpg"
+check "exit 0" exits 0
+if [[ -n "$OPS" ]]; then
+  check "prints the jpg" printed "$C/out/mug.jpg"
+  check "JPEG magic bytes" magic "$C/out/mug.jpg" ffd8ff
+  check "receipt says it was converted" has "$C/out/mug.prompt.txt" "converted png -> jpg"
+  check "signed png original kept" img "$C/out/mug.original.png" png 1254x1254
+else
+  check "prints the delivered png" printed "$C/out/mug.png"
+  check "PNG magic bytes" magic "$C/out/mug.png" 89504e
+  check "no mislabeled jpg" test ! -e "$C/out/mug.jpg"
+fi
+check "one paint" paints 1 codex
 
 newcase "antigravity: text to png at an asked size"
 run bash "$bin/antigravity-image" "a red mug" "$C/out/mug.png" --size 1024x1024
@@ -179,6 +198,15 @@ check "prints the delivered jpg" printed "$C/out/fox.jpg"
 check "jpeg 1024x1024" img "$C/out/fox.jpg" jpeg 1024x1024
 check "receipt says why" has "$C/out/fox.prompt.txt" "image ops"
 check "one paint" paints 1 grok
+
+newcase "chatgpt: delivers its own png when asked for jpg"
+run bash "$bin/chatgpt-image" "a red mug" "$C/out/mug.jpeg"
+check "exit 0" exits 0
+check "prints the delivered png" printed "$C/out/mug.png"
+check "PNG magic bytes" magic "$C/out/mug.png" 89504e
+check "no mislabeled jpeg" test ! -e "$C/out/mug.jpeg"
+check "warns on stderr" has "$C/stderr" "WARNING"
+check "receipt says why" has "$C/out/mug.prompt.txt" "image ops"
 
 newcase "chatgpt: keeps the painter's size"
 run bash "$bin/chatgpt-image" "a red mug" "$C/out/mug.png" --size 1024x1024
