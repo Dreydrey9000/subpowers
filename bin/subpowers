@@ -6,7 +6,7 @@
 #   subpowers sheet NAME out.png [--painter P|all]      character sheet (front, sides, 3/4, close-up)
 #   subpowers storyboard shots.txt OUTDIR [--refs NAME] [--painter P] [--size WxH] [--style "..."]
 #   subpowers refs add NAME IMG...  |  refs list [NAME]  |  refs path NAME
-#   subpowers slideshow OUT.webp IMG... [--width 880]    looping crossfade of your picks (a README "slider")
+#   subpowers slideshow OUT.webp IMG... [--width 880]    looping slider of your picks (plays in any README)
 #   subpowers library find [WORDS] [--painter P] [--tag k=v]  every image you made, with its tags
 #   subpowers doctor [--fix] [--smoke]  |  powers  |  update
 #
