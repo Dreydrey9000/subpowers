@@ -16,7 +16,7 @@ jobs:
           - { os: ubuntu-latest, pillow: false }
           - { os: macos-latest, pillow: false }
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # System-wide, not --user: tests/run.sh gives every command a temporary HOME.
       - name: Install Pillow
         if: matrix.pillow
