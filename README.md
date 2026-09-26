@@ -1,8 +1,8 @@
 <p align="center"><picture>
   <source media="(prefers-reduced-motion: reduce)" srcset="assets/hero-still.jpg">
-  <img src="assets/hero-slider.webp" alt="Three friends making content around Los Angeles: selfies in a Tesla, a podcast, a loft shoot, the Venice boardwalk, a rooftop at night, a cafe. Their phone cases show Grok, ChatGPT and Google." width="100%">
+  <img src="assets/hero-slider.webp" alt="Parody illustration: Elon Musk, Sam Altman and Sundar Pichai hanging out as friends, in GTA, Street Fighter and caricature styles: on a Tesla at a Los Angeles overlook, at a podcast table, fist-bumping, at a burger stand, at a beach bonfire. Their phone cases show Grok, ChatGPT and Google." width="100%">
 </picture></p>
-<p align="center"><sub>Your personal assistants, on your subscriptions. Every frame above was painted by <code>subpowers</code> on a ChatGPT plan, the same three (AI-generated) people kept consistent across six scenes with <code>--ref</code>. Logos belong to their owners; none of them endorse this.</sub></p>
+<p align="center"><sub>Elon (Grok), Sam (ChatGPT) and Sundar (Gemini), just the boys hanging out. Every frame above was painted by <code>subpowers</code> on ChatGPT and Google AI plans, in three styles, the same characters kept consistent with <code>--ref</code>. Parody illustration: not affiliated with or endorsed by Elon Musk, Sam Altman, Sundar Pichai, xAI, OpenAI or Google.</sub></p>
 
 <h1 align="center">subpowers</h1>
 
@@ -150,7 +150,7 @@ subpowers storyboard shots.txt board/ --refs me --style "35mm, deep blue palette
 - **Storyboards:** write one shot per line (framing, action, setting). Frames paint in parallel and land in `storyboard.jpg` in order, with the same person in every shot.
 - **Cancel a plan, nothing breaks.** A paused subscription just shows OFF in `subpowers powers`, and `auto` moves to the next painter when one fails or runs out of quota.
 - **One rule for real people:** never pass a photo of someone *else* as a setting reference. The painters borrow faces from every reference. Describe the set in words instead.
-- **Same cast, new scene:** pass an earlier image with `--ref` and say "the same three people as in the reference". That is how the hero above stays consistent from the car to the podcast.
+- **Same cast, new scene:** pass an earlier image with `--ref` and say "the same people as in the reference". That is how the hero above stays consistent from the Tesla to the podcast.
 
 ```bash
 subpowers library find podcast                        # every image you have made, newest first, with its tags
@@ -193,7 +193,7 @@ Never ask the user for an API key, and never put one in. subpowers only uses the
 - Images use your plan's normal usage limits; an image costs more of your allowance than a text message. If you run out, it says so and waits for the reset. It never switches to a paid API.
 - This rides on the official `codex` and `agy` command-line tools, not on a published image API, so providers can change behavior. The doctor and the daily codex update are there for exactly that.
 - Use your own login on your own machine. Don't share credentials or use this to resell access.
-- The people in the hero are AI-generated; they are not real. The phone-case logos show which plan painted what.
+- The hero is a parody illustration of public figures: they did not pose for it and do not endorse subpowers. The phone-case logos show which plan each one stands for. subpowers will not make photorealistic images of real people in made-up scenes.
 - subpowers is an independent open-source project. ChatGPT and Codex are trademarks of OpenAI; Antigravity, Gemini and Nano Banana are trademarks of Google; Grok and Grok Imagine are trademarks of xAI. None of them made or endorses this.
 
 ## What's next: build it with us
