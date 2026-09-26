@@ -44,7 +44,12 @@ login_cached() {  # login_cached <painter> <check-fn>
   if "$2"; then echo on >"$f"; else echo off >"$f"; return 1; fi
 }
 mark_off() { mkdir -p "$CACHE_DIR"; echo off >"$CACHE_DIR/login-$1"; }
-tmo() { if command -v timeout >/dev/null 2>&1; then timeout 45 "$@"; else "$@"; fi; }
+# Stock macOS has no timeout(1); perl's alarm does the same job there.
+tmo() {
+  if command -v timeout >/dev/null 2>&1; then timeout 45 "$@"
+  elif command -v perl >/dev/null 2>&1; then perl -e 'alarm shift; exec @ARGV' 45 "$@"
+  else "$@"; fi
+}
 # Output is captured before grep: under pipefail, `cli | grep -q` fails when grep exits
 # early and the CLI dies of SIGPIPE, which read a logged-in plan as OFF (2026-09-26).
 chk_antigravity() {

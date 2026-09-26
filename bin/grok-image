@@ -177,7 +177,10 @@ ${prompt}
 PROMPT>>>
 EOF
 
-tcmd=(); command -v timeout >/dev/null 2>&1 && tcmd=(timeout "$tmo")
+# Stock macOS has no timeout(1); perl's alarm does the same job there (exit 142, not 124).
+tcmd=()
+if command -v timeout >/dev/null 2>&1; then tcmd=(timeout "$tmo")
+elif command -v perl >/dev/null 2>&1; then tcmd=(perl -e 'alarm shift; exec @ARGV' "$tmo"); fi
 margs=(); [[ -n "$driver" ]] && margs=(-m "$driver")
 
 t0=$(date +%s)
@@ -243,13 +246,13 @@ fi
 wall=$(( $(date +%s) - t0 ))
 
 if [[ -z "$saved" || ! -f "$saved" ]]; then
-  if [[ -n "$terr" ]]; then
+  if [[ $rc -eq 124 || $rc -eq 142 ]]; then
+    echo "grok-image: timed out after ${tmo}s" >&2
+  elif [[ -n "$terr" ]]; then
     echo "grok-image: the ${tool} tool failed: ${terr}" >&2
     if printf '%s' "$terr" | grep -qi "SuperGrok feature"; then exit 4; fi
   elif [[ "$ncalls" == "0" ]]; then
     echo "grok-image: grok finished (exit ${rc}, ${wall}s) but never called ${tool}. Rerun, or reword a prompt that reads like a policy refusal. Reply: $(field reply)" >&2
-  elif [[ $rc -eq 124 ]]; then
-    echo "grok-image: timed out after ${tmo}s" >&2
   else
     echo "grok-image: no ${tool} output was found (exit ${rc})." >&2
   fi
