@@ -70,8 +70,8 @@ f, w, h = fakeimg.dims(sys.argv[2]); print("%s %dx%d" % (f, w, h))' "$stubs" "$1
   [[ "$got" == "$2 $3" ]] || { echo "        $(basename "$1") is $got"; return 1; }
 }
 printed() { [[ "$(tail -n 1 "$C/stdout")" == "$1" ]] || { echo "        printed: $(tail -n 1 "$C/stdout")"; return 1; }; }
-called() { grep -F -- "$1" "$C/stub.log" | grep -qF -- "$2"; }   # called <a stub call matching> <that also has>
-pillow() { env ${PYP:+PYTHONPATH=$PYP} python3 -c 'import PIL' 2>/dev/null; }
+called() { local m; m="$(grep -F -- "$1" "$C/stub.log")"; grep -qF -- "$2" <<<"$m"; }   # called <a stub call matching> <that also has>
+pillow() { env -i HOME="$T" PATH="$P" ${PYP:+PYTHONPATH=$PYP} python3 -c 'import PIL' 2>/dev/null; }   # as the cases see it: no user site-packages
 
 # Image ops exist when Pillow imports or sips is on the PATH. Without them a painter
 # delivers its own file, in its own format and size, and says so.
