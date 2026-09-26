@@ -55,9 +55,15 @@ subpowers doctor      # live-checks every painter and names the exact fix
 
 Write the shot list yourself (one shot per line: framing, action, setting), save it to a text file, then run `storyboard`. Frames paint in parallel (3 at a time, `SUBPOWERS_PARALLEL`), and `storyboard.jpg` shows them in order. Use `--refs NAME` so the same person appears in every shot, and `--style` for one consistent look. Antigravity is the fastest painter for boards.
 
-## Video (not in this door yet)
+## Video
 
-No painter makes video headlessly today. Grok Imagine video (image to video, 6 or 10 s) works through the Grok CLI once its video output bucket is configured (or `/privacy` is off); Google's Gemini Omni needs the Gemini app. If the user needs a clip now, say so and name those routes; never fake a video from stills.
+```bash
+subpowers video "<prompt>" /abs/out.mp4 [--first IMG] [--last IMG] [--ref IMG]... [--refs NAME] [--voice ID] [--duration 1-15] [--aspect 16:9|9:16|1:1] [--resolution 480p|720p]
+```
+
+- Grok Imagine video on the user's SuperGrok plan: an MP4 with sound. Video starts from an image: with no `--first`/`--ref`, subpowers paints the first frame on the default image plan (in the clip's shape), then animates it. About 1 to 2 minutes.
+- Describe motion as a change of position ("turns from the city toward the camera"), one clear action per clip.
+- `grok-video` fails with "unavailable under zero data retention" when the user's Grok account is in privacy mode: tell them to run `grok`, type `/privacy`, choose Opt in (xAI then keeps that data), or set up a video storage bucket. Never fake a video from stills.
 
 ## Always the best model
 

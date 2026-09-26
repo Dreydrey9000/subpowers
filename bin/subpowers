@@ -7,6 +7,7 @@
 #   subpowers storyboard shots.txt OUTDIR [--refs NAME] [--painter P] [--size WxH] [--style "..."]
 #   subpowers refs add NAME IMG...  |  refs list [NAME]  |  refs path NAME
 #   subpowers slideshow OUT.webp IMG... [--width 880]    looping slider of your picks (plays in any README)
+#   subpowers video "<prompt>" out.mp4 [--first IMG] [--refs NAME] [--duration 1-15] [--aspect 16:9]  a short Grok video with sound
 #   subpowers library find [WORDS] [--painter P] [--tag k=v]  every image you made, with its tags
 #   subpowers doctor [--fix] [--smoke]  |  powers  |  update
 #
@@ -266,6 +267,38 @@ Photorealistic, evenly spaced, no text, no labels, no watermark."
       path) [[ $# -ge 1 ]] || usage; echo "$HOME_DIR/refs/$1" ;;
       *) say "refs: add | list | path"; exit 2 ;;
     esac
+    ;;
+  video)
+    [[ $# -ge 2 ]] || usage
+    prompt="$1"; out="$2"; shift 2
+    vargs=(); has_src=""; aspect="16:9"; fpainter="$(norm_painter "${SUBPOWERS_PAINTER:-auto}")"
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --first|--last|--ref|--voice) [[ $# -ge 2 ]] || usage; has_src=1; vargs+=("$1" "$2"); shift 2 ;;
+        --refs)
+          [[ $# -ge 2 ]] || usage
+          rf="$(ref_files "$2")" || exit 3
+          while IFS= read -r f; do [[ -n "$f" ]] && { vargs+=(--ref "$f"); has_src=1; }; done <<< "$rf"
+          shift 2 ;;
+        --aspect) [[ $# -ge 2 ]] || usage; aspect="$2"; vargs+=("$1" "$2"); shift 2 ;;
+        --painter) [[ $# -ge 2 ]] || usage; fpainter="$(norm_painter "$2")"; shift 2 ;;
+        *) vargs+=("$1"); shift ;;
+      esac
+    done
+    if [[ -z "$has_src" ]]; then
+      # Video starts from an image: paint the first frame in the clip's shape, then animate it.
+      case "$aspect" in
+        9:16) fsize=1080x1920 ;; 1:1) fsize=1024x1024 ;; 4:3) fsize=1600x1200 ;; 3:4) fsize=1200x1600 ;;
+        3:2) fsize=1536x1024 ;; 2:3) fsize=1024x1536 ;; *) fsize=1920x1080 ;;
+      esac
+      [[ "$fpainter" == all ]] && fpainter=auto
+      say "no image given: painting the first frame ($fsize) before animating it"
+      frame="$(paint "$fpainter" "$prompt" "${out%.*}.first.png" --size "$fsize" | tail -n 1)" || exit $?
+      vargs+=(--first "$frame")
+    fi
+    got="$(bash "$here/grok-video" "$prompt" "$out" ${vargs[@]+"${vargs[@]}"})" || exit $?
+    python3 "$here/library" add "$got" >/dev/null || true
+    echo "$got"
     ;;
   slideshow|slider) exec python3 "$here/slideshow" "$@" ;;
   library|lib) exec python3 "$here/library" "$@" ;;

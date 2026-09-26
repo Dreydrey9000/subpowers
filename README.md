@@ -141,7 +141,7 @@ The receipt also says when an image was cropped or upscaled locally, so nothing 
 
 `subpowers image` uses ChatGPT when it's connected, then Google, then Grok. Pick one with `--painter chatgpt|google|grok`, all of them with `--painter council`, or set `SUBPOWERS_PAINTER`. Every painter runs with API-key auth switched off, so it can only ever use your plan.
 
-**Video is next.** Grok Imagine video (image to video, 6 or 10 s) already works through the Grok CLI on SuperGrok once its video output is set up, and Google's Gemini Omni (video from up to 5 reference photos) is on the [roadmap](ROADMAP.md).
+**Video.** `subpowers video "<prompt>" out.mp4` makes a short clip with sound on your SuperGrok plan (Grok Imagine video, 1 to 15 s, 480p or 720p). Give it a first frame with `--first img.png`, people or products with `--ref`/`--refs`, or nothing at all and it paints the first frame for you on your image plan, then animates it. Accounts in Grok's privacy mode (`/privacy` set to Opt out) need to opt in or add a video storage bucket first. Google's Gemini Omni video is on the [roadmap](ROADMAP.md).
 
 ## Beyond one image
 
