@@ -1,0 +1,68 @@
+{
+  "version": 1,
+  "updated": "2026-09-26",
+  "about": "Everything subpowers depends on in the vendor CLIs, as pure data. bin/canary checks each item against the CLI's own --help / --version / models / login output and reports DRIFT when one disappears. Derived by grepping bin/chatgpt-image, bin/antigravity-image, bin/grok-image, bin/subpowers, bin/doctor and bin/update-codex for every flag they pass and every output string they parse. When a painter starts depending on something new, add an item here; never list anything the code does not use.",
+  "placeholders": {
+    "$tmpdir": "a fresh empty temp directory, created by bin/canary for the probe"
+  },
+  "item_types": {
+    "flag": "the token appears in the probe output as its own flag (delimited, never inside a longer flag)",
+    "string": "the exact substring appears (case-sensitive)",
+    "istring": "the substring appears, any case",
+    "regex": "python re.search over the whole combined stdout+stderr of the probe",
+    "exit0": "the probe command exits 0"
+  },
+  "clis": {
+    "codex": {
+      "about": "the ChatGPT painter's engine",
+      "version": { "probe": ["--version"], "regex": "[0-9]+\\.[0-9]+\\.[0-9]+" },
+      "items": [
+        { "id": "exec---json",             "probe": ["exec", "--help"], "flag": "--json",                "used_by": "bin/chatgpt-image, bin/doctor", "why": "codex exec --json: the painter reads its JSONL events" },
+        { "id": "exec---skip-git-repo-check", "probe": ["exec", "--help"], "flag": "--skip-git-repo-check", "used_by": "bin/chatgpt-image, bin/doctor", "why": "the painter paints from temp dirs, never git repos" },
+        { "id": "exec---s",                "probe": ["exec", "--help"], "flag": "-s",                    "used_by": "bin/chatgpt-image, bin/doctor", "why": "codex exec -s workspace-write: the sandbox mode of every paint" },
+        { "id": "exec-sandbox-workspace-write", "probe": ["exec", "--help"], "string": "workspace-write", "used_by": "bin/chatgpt-image, bin/doctor", "why": "the -s value the painter passes on every paint" },
+        { "id": "exec---C",                "probe": ["exec", "--help"], "flag": "-C",                    "used_by": "bin/chatgpt-image, bin/doctor", "why": "codex exec -C <workdir>: where references are staged" },
+        { "id": "exec---i",                "probe": ["exec", "--help"], "flag": "-i",                    "used_by": "bin/chatgpt-image",             "why": "codex exec -i <img>: how reference photos reach the driver" },
+        { "id": "exec---m",                "probe": ["exec", "--help"], "flag": "-m",                    "used_by": "bin/chatgpt-image, bin/doctor", "why": "codex exec -m <model>: the driver model chain" },
+        { "id": "exec---c",                "probe": ["exec", "--help"], "flag": "-c",                    "used_by": "bin/chatgpt-image, bin/doctor", "why": "codex exec -c key=value: the login-isolating config overrides" },
+        { "id": "exec---ignore-user-config", "probe": ["exec", "--help"], "flag": "--ignore-user-config", "used_by": "bin/chatgpt-image, bin/doctor", "why": "the painter greps exec --help for it, then pins the call to the ChatGPT login" },
+        { "id": "login-chatgpt",           "probe": ["login", "status"], "istring": "ChatGPT",           "used_by": "bin/chatgpt-image, bin/subpowers, bin/doctor", "why": "'Logged in using ChatGPT' is the only login this painter accepts" },
+        { "id": "features-image_generation", "probe": ["features", "list"], "regex": "(?m)^image_generation\\s+\\S+\\s+true\\s*$", "used_by": "bin/doctor", "why": "doctor fails the ChatGPT painter when the image_generation feature is off" }
+      ]
+    },
+    "agy": {
+      "about": "the Antigravity (Google) painter's engine",
+      "version": { "probe": ["--version"], "regex": "[0-9]+\\.[0-9]+\\.[0-9]+" },
+      "items": [
+        { "id": "flag---gemini_dir",       "probe": ["--gemini_dir", { "$tmpdir": true }, "models"], "regex": "(?m)^gemini-[0-9]", "used_by": "bin/antigravity-image, bin/doctor", "why": "undocumented in --help, so probed by use: every paint runs agy --gemini_dir=<isolated profile> (zero MCP servers); an unknown flag makes models print a flag error instead of the model list" },
+        { "id": "flag---sandbox",          "probe": ["--help"], "flag": "--sandbox",                   "used_by": "bin/antigravity-image", "why": "part of the isolated, no-permission-prompt paint invocation" },
+        { "id": "flag---dangerously-skip-permissions", "probe": ["--help"], "flag": "--dangerously-skip-permissions", "used_by": "bin/antigravity-image", "why": "headless paints must not wait for a permission prompt" },
+        { "id": "flag---model",            "probe": ["--help"], "flag": "--model",                     "used_by": "bin/antigravity-image", "why": "the driver model chain from agy models" },
+        { "id": "flag---p",                "probe": ["--help"], "flag": "-p",                          "used_by": "bin/antigravity-image", "why": "the single-turn prompt flag of every paint" },
+        { "id": "flag---print-timeout",    "probe": ["--help"], "flag": "--print-timeout",             "used_by": "bin/antigravity-image", "why": "AGY_IMAGE_TIMEOUT is passed as --print-timeout <N>s" },
+        { "id": "flag---output-format",    "probe": ["--help"], "flag": "--output-format",             "used_by": "bin/antigravity-image", "why": "the painter parses the stream-json events" },
+        { "id": "output-format-stream-json", "probe": ["--help"], "string": "stream-json",             "used_by": "bin/antigravity-image", "why": "the --output-format value the painter passes" },
+        { "id": "models-gemini-flash",     "probe": ["models"], "regex": "(?m)^gemini-[0-9.]+-flash-(low|medium|high)\\b", "used_by": "bin/antigravity-image, bin/doctor, bin/subpowers", "why": "the driver chain is picked from gemini-X-flash-(low|medium|high) lines" }
+      ]
+    },
+    "grok": {
+      "about": "the Grok (xAI) painter's engine",
+      "version": { "probe": ["--version"], "regex": "[0-9]+\\.[0-9]+\\.[0-9]+" },
+      "items": [
+        { "id": "flag---prompt-file",      "probe": ["--help"], "flag": "--prompt-file",               "used_by": "bin/grok-image", "why": "the verbatim prompt goes in through a file" },
+        { "id": "flag---tools",            "probe": ["--help"], "flag": "--tools",                     "used_by": "bin/grok-image", "why": "only the image tool is enabled for the relay" },
+        { "id": "flag---allow",            "probe": ["--help"], "flag": "--allow",                     "used_by": "bin/grok-image", "why": "the one tool allow rule of every paint" },
+        { "id": "flag---disallowed-tools", "probe": ["--help"], "flag": "--disallowed-tools",          "used_by": "bin/grok-image", "why": "search_tool,use_tool are removed so the helper can only paint" },
+        { "id": "flag---no-subagents",     "probe": ["--help"], "flag": "--no-subagents",              "used_by": "bin/grok-image", "why": "one paint, no fan-out" },
+        { "id": "flag---disable-web-search", "probe": ["--help"], "flag": "--disable-web-search",      "used_by": "bin/grok-image", "why": "the helper cannot browse" },
+        { "id": "flag---output-format",    "probe": ["--help"], "flag": "--output-format",             "used_by": "bin/grok-image", "why": "the painter parses the streaming-json events" },
+        { "id": "output-format-streaming-json", "probe": ["--help"], "string": "streaming-json",       "used_by": "bin/grok-image", "why": "the --output-format value the painter passes" },
+        { "id": "flag---effort",           "probe": ["--help"], "flag": "--effort",                    "used_by": "bin/grok-image", "why": "GROK_IMAGE_EFFORT (an alias of --reasoning-effort; --help lists it under aliases)" },
+        { "id": "flag---m",                "probe": ["--help"], "flag": "-m",                          "used_by": "bin/grok-image", "why": "the driver model from grok models" },
+        { "id": "flag---cwd",              "probe": ["--help"], "flag": "--cwd",                       "used_by": "bin/grok-image", "why": "paints run from the temp workdir" },
+        { "id": "models-logged-in",        "probe": ["models"], "istring": "logged in with grok.com",   "used_by": "bin/grok-image, bin/subpowers, bin/doctor", "why": "the only login this painter accepts" },
+        { "id": "models-bulleted-ids",     "probe": ["models"], "regex": "(?m)^\\s*[-*]\\s+[A-Za-z0-9._-]+", "used_by": "bin/grok-image, bin/doctor", "why": "the driver is picked from bulleted model ids ('  - grok-4.7')" }
+      ]
+    }
+  }
+}
