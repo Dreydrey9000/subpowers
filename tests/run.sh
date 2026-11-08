@@ -624,15 +624,31 @@ check "exit 0" exits 0
 
 echo "== bad input gets a plain answer"
 printf 'a wide shot\n' >"$T/shots.txt"
-newcase "storyboard: a flag with no value"
+newcase "storyboard: --painter with no value"
 run bash "$bin/subpowers" storyboard "$T/shots.txt" "$C/out/board" --painter
 check "exit 2" exits 2
-check "names the flag" has "$C/stderr" "--painter needs a value"
+check "prints usage" has "$C/stderr" "Usage:"
 check "no bash internals" hasnt "$C/stderr" "unbound variable"
-newcase "image: an unknown painter lists the real names"
+newcase "storyboard: --style with no value"
+run bash "$bin/subpowers" storyboard "$T/shots.txt" "$C/out/board" --style
+check "exit 2" exits 2
+check "no bash internals" hasnt "$C/stderr" "unbound variable"
+newcase "storyboard: --size with no value"
+run bash "$bin/subpowers" storyboard "$T/shots.txt" "$C/out/board" --size
+check "exit 2" exits 2
+check "no bash internals" hasnt "$C/stderr" "unbound variable"
+newcase "storyboard: --refs with no value"
+run bash "$bin/subpowers" storyboard "$T/shots.txt" "$C/out/board" --refs
+check "exit 2" exits 2
+check "no bash internals" hasnt "$C/stderr" "unbound variable"
+newcase "image: an unknown painter lists the painter id"
 run bash "$bin/subpowers" image "a red mug" "$C/out/mug.png" --painter dalle
 check "exit 2" exits 2
-check "offers google and council" has "$C/stderr" "chatgpt, google, grok, council"
+check "offers antigravity and council" has "$C/stderr" "chatgpt, antigravity, grok, council"
+newcase "image: google is an alias for antigravity"
+run bash "$bin/subpowers" image "a red mug" "$C/out/mug.png" --painter google
+check "exit 0" exits 0
+check "paints with agy" paints 1 agy
 
 echo
 echo "$pass passed, $fail failed"

@@ -12,7 +12,7 @@ If `subpowers` is not on PATH, run `bash ~/.claude/skills/subpowers/bin/subpower
 ## Commands
 
 ```bash
-subpowers image "<prompt>" /abs/out.png [--painter chatgpt|google|grok|council] [--size WxH] [--ref photo.jpg]... [--refs NAME]
+subpowers image "<prompt>" /abs/out.png [--painter chatgpt|antigravity|grok|council] [--size WxH] [--ref photo.jpg]... [--refs NAME]
 subpowers refs add NAME photo1.jpg photo2.heic ...     # save a reference set once (a person, a product, a world)
 subpowers sheet NAME /abs/sheet.png [--painter all]     # character sheet: front, profiles, 3/4, back, face close-up
 subpowers storyboard shots.txt /abs/outdir [--refs NAME] [--painter P] [--style "..."]   # one frame per line + a board
@@ -27,7 +27,7 @@ subpowers --version   # which version is installed
 
 ## Pick the painter
 
-| | `chatgpt` (default when connected) | `google` (also accepts `antigravity`) | `grok` |
+| | `chatgpt` (default when connected) | `antigravity` (google is an alias) | `grok` |
 |---|---|---|---|
 | Model | OpenAI's current image model | Google's Nano Banana 2 | xAI's Grok Imagine |
 | Speed | 60 to 100 s | 20 to 120 s | 45 to 100 s |
@@ -54,7 +54,7 @@ subpowers --version   # which version is installed
 
 ## Storyboards
 
-Write the shot list yourself (one shot per line: framing, action, setting), save it to a text file, then run `storyboard`. Frames paint in parallel (3 at a time, `SUBPOWERS_PARALLEL`), and `storyboard.jpg` shows them in order. Use `--refs NAME` so the same person appears in every shot, and `--style` for one consistent look.
+Write the shot list yourself (one shot per line: framing, action, setting), save it to a text file, then run `storyboard`. Frames paint in parallel (3 at a time, `SUBPOWERS_PARALLEL`), and `storyboard.jpg` shows them in order. Use `--refs NAME` so the same person appears in every shot, and `--style` for one consistent look. Antigravity is the fastest painter for boards.
 
 ## Video
 
